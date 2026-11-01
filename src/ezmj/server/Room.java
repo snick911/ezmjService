@@ -1,0 +1,649 @@
+package ezmj.server;
+
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import ezmj.bot.Bot;
+import ezmj.bot.ComputerBot;
+import ezmj.bot.SeatedBots;
+import ezmj.engine.Claim;
+import ezmj.engine.GameSession;
+import ezmj.engine.Round;
+import ezmj.engine.RoundEvent;
+import ezmj.engine.Settlement;
+import ezmj.engine.TurnOptions;
+import ezmj.model.BotLevel;
+import ezmj.model.GameConfig;
+import ezmj.model.Tile;
+import ezmj.table.TableFlow;
+
+/**
+ * 一間房間：等人、開局，把牌桌流程接到連線上。
+ * 房間的狀態與 TableFlow 都只在自己的一條執行緒上動，外面的呼叫一律排進去。
+ *
+ * 真人從座位 0 往後坐，開局前有人離開就往前補，所以座位 0 一定是真人，也是房主；
+ * 引擎的 SeatedBots 只替座位 1 到 3 決定，靠這點才接得上。
+ * 牌局中斷線或離開的人由電腦代打，座位不變。
+ */
+final class Room implements TableFlow.Listener {
+
+    private static final int SEATS = 4;
+    private static final int JOIN_TIMEOUT_SECONDS = 10;
+
+    private enum State { LOBBY, PLAYING, CLOSED }
+
+    /** 送給某個座位、還沒回覆的詢問，連線被換掉時要重送。 */
+    private record Ask(int waitId, Map<String, Object> message, List<Claim> claims) {
+    }
+
+    private final EzmjServer server;
+    private final String code;
+    private final RoomOptions options;
+    private final Timing timing;
+    private final ScheduledExecutorService executor;
+    private final Member[] seats = new Member[SEATS];
+    private final Ask[] asks = new Ask[SEATS];
+    private final Set<Integer> readySeats = new HashSet<>();
+
+    private State state = State.LOBBY;
+    private GameSession session;
+    private TableFlow flow;
+    private Set<Integer> people = Set.of();
+    /** 開局時定下的四家名字。引擎只知道房主的名字，其他座位在引擎裡都是電腦的名字，所以不轉發它的 log。 */
+    private final String[] names = new String[SEATS];
+    /** 上一局的結果，還沒開下一局時才有。 */
+    private Map<String, Object> lastRoundEnd;
+    private Runnable cancelNextRound = () -> { };
+    private Runnable cancelAbandon = () -> { };
+
+    Room(EzmjServer server, String code, RoomOptions options, Timing timing) {
+        this.server = server;
+        this.code = code;
+        this.options = options;
+        this.timing = timing;
+        this.executor = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "ezmj-room-" + code);
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    String code() {
+        return code;
+    }
+
+    /** 等到坐下才回來，房間滿了或已經關了就丟出 Rejected。 */
+    void join(Member member) {
+        Future<?> seating;
+        try {
+            seating = executor.submit(() -> seat(member));
+        } catch (RejectedExecutionException closed) {
+            throw new Rejected("noSuchRoom", "找不到這個房間");
+        }
+        try {
+            seating.get(JOIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            // 排進去時房間正好關閉的話，這件事就不會執行，也不會有結果
+            seating.cancel(false);
+            throw new Rejected("noSuchRoom", "找不到這個房間");
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof Rejected) {
+                throw (Rejected) e.getCause();
+            }
+            throw new IllegalStateException(e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Rejected("internal", "服務器正在關閉");
+        }
+    }
+
+    /** 客戶端在房間裡送來的訊息。不合規則的回 error，局面不變。 */
+    void handle(Member member, String type, Map<String, Object> message) {
+        post(() -> {
+            if (member.room != this) {
+                return;
+            }
+            try {
+                dispatch(member, type, message);
+            } catch (Rejected rejected) {
+                member.send(Protocol.error(rejected.code(), rejected.getMessage()));
+            }
+        });
+    }
+
+    /** 這位玩家的連線斷了。呼叫前 connection 已經清掉；排到時已經重連的話就不用處理。 */
+    void disconnected(Member member) {
+        post(() -> {
+            if (member.room != this || member.connection != null) {
+                return;
+            }
+            if (state == State.LOBBY) {
+                removeFromLobby(member);
+                return;
+            }
+            flow.setAutoPlay(member.seat, true);
+            broadcastRoom();
+            closeIfAbandoned();
+        });
+    }
+
+    /** 這位玩家用新的連線回來了，補上他錯過的局面。 */
+    void reconnected(Member member) {
+        post(() -> {
+            if (member.room != this) {
+                return;
+            }
+            cancelAbandon.run();
+            cancelAbandon = () -> { };
+            if (state == State.PLAYING) {
+                flow.setAutoPlay(member.seat, member.wantsAutoPlay);
+            }
+            broadcastRoom();
+            if (state == State.PLAYING) {
+                sendState(member.seat);
+                if (lastRoundEnd != null) {
+                    member.send(lastRoundEnd);
+                }
+                Ask ask = asks[member.seat];
+                if (ask != null && flow.isWaiting(member.seat, ask.waitId())) {
+                    member.send(ask.message());
+                }
+            }
+        });
+    }
+
+    /** 服務器要關了。 */
+    void shutdown() {
+        post(() -> close("serverStopping"));
+    }
+
+    private void dispatch(Member member, String type, Map<String, Object> message) {
+        switch (type) {
+            case "leave":
+                leave(member);
+                break;
+            case "start":
+                startGame(member);
+                break;
+            case "autoPlay":
+                setAutoPlay(member, Protocol.bool(message, "on"));
+                break;
+            case "ready":
+                markReady(member);
+                break;
+            case "discard":
+            case "listen":
+            case "selfWin":
+            case "kong":
+            case "claim":
+            case "pass":
+                decide(member, type, message);
+                break;
+            default:
+                throw new Rejected("unknownType", "不認得的訊息 " + type);
+        }
+    }
+
+    private void seat(Member member) {
+        if (state != State.LOBBY) {
+            throw new Rejected("gameInProgress", "這間房間已經開打了");
+        }
+        int seat = humanCount();
+        if (seat == SEATS) {
+            throw new Rejected("roomFull", "房間已滿");
+        }
+        seats[seat] = member;
+        member.seat = seat;
+        member.wantsAutoPlay = false;
+        member.room = this;
+        broadcastRoom();
+    }
+
+    private int humanCount() {
+        int count = 0;
+        for (Member member : seats) {
+            if (member != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void leave(Member member) {
+        if (state == State.LOBBY) {
+            removeFromLobby(member);
+            member.send(Protocol.object("type", "left"));
+            return;
+        }
+        flow.setAutoPlay(member.seat, true);
+        seats[member.seat] = null;
+        member.room = null;
+        member.send(Protocol.object("type", "left"));
+        broadcastRoom();
+        closeIfAbandoned();
+    }
+
+    private void removeFromLobby(Member member) {
+        List<Member> staying = new ArrayList<>();
+        for (Member other : seats) {
+            if (other != null && other != member) {
+                staying.add(other);
+            }
+        }
+        member.room = null;
+        server.forget(member);
+        reseat(staying);
+    }
+
+    /** 大家從座位 0 往後重新坐好。沒有人了就關房間。 */
+    private void reseat(List<Member> staying) {
+        for (int seat = 0; seat < SEATS; seat++) {
+            seats[seat] = seat < staying.size() ? staying.get(seat) : null;
+            if (seats[seat] != null) {
+                seats[seat].seat = seat;
+            }
+        }
+        if (staying.isEmpty()) {
+            close("empty");
+        } else {
+            broadcastRoom();
+        }
+    }
+
+    private void startGame(Member member) {
+        if (state != State.LOBBY) {
+            throw new Rejected("gameInProgress", "牌局已經開始了");
+        }
+        if (member.seat != 0) {
+            throw new Rejected("notHost", "只有房主可以開局");
+        }
+        // 別人要是猜得到亂數就猜得到牌牆，所以用 SecureRandom
+        Random random = new SecureRandom();
+        GameConfig config = new GameConfig(member.name, options.chips(), options.basePay(), options.taiPay(),
+                options.botLevels());
+        session = new GameSession(config, random);
+        Set<Integer> humans = new HashSet<>();
+        for (int seat = 0; seat < SEATS; seat++) {
+            if (seats[seat] != null) {
+                humans.add(seat);
+                names[seat] = seats[seat].name;
+            } else {
+                names[seat] = session.player(seat).name();
+            }
+        }
+        people = Set.copyOf(humans);
+        Bot bot = new SeatedBots(config.botLevels(),
+                List.of(session.personality(1), session.personality(2), session.personality(3)),
+                config.basePay(), config.taiPay(), random);
+        Bot proxy = new ComputerBot(BotLevel.PRO, config.basePay(), config.taiPay(), random);
+        flow = new TableFlow(session, people, bot, proxy, new TableFlow.Pacing() {
+            @Override
+            public int turnDelayMs() {
+                return timing.instantBots() ? 0 : options.speed().turnDelayMs();
+            }
+
+            @Override
+            public int claimDelayMs() {
+                return timing.instantBots() ? 0 : options.speed().claimDelayMs();
+            }
+
+            @Override
+            public int waitSeconds() {
+                return options.waitSeconds();
+            }
+        }, this::after, this);
+        state = State.PLAYING;
+        broadcastRoom();
+        flow.startRound();
+    }
+
+    private void setAutoPlay(Member member, boolean on) {
+        requirePlaying();
+        member.wantsAutoPlay = on;
+        flow.setAutoPlay(member.seat, on);
+        sendState(member.seat);
+    }
+
+    private void markReady(Member member) {
+        requirePlaying();
+        if (lastRoundEnd == null) {
+            return;
+        }
+        readySeats.add(member.seat);
+        for (Member other : seats) {
+            if (other != null && other.connection != null && !readySeats.contains(other.seat)) {
+                return;
+            }
+        }
+        startNextRound();
+    }
+
+    private void startNextRound() {
+        cancelNextRound.run();
+        cancelNextRound = () -> { };
+        lastRoundEnd = null;
+        readySeats.clear();
+        flow.startRound();
+    }
+
+    /**
+     * 玩家的決定。比倒數晚到的就忽略，這不是客戶端的錯。其他都先在這裡檢查完才交給 TableFlow，
+     * 所以 TableFlow 再丟出例外就是服務器的問題，不是玩家亂送，由 guard 關房間。
+     */
+    private void decide(Member member, String type, Map<String, Object> message) {
+        requirePlaying();
+        int seat = member.seat;
+        int id = Protocol.integer(message, "waitId");
+        if (!flow.isWaiting(seat, id)) {
+            return;
+        }
+        Round round = flow.round();
+        boolean turn = round.phase() == Round.Phase.TURN;
+        switch (type) {
+            case "discard": {
+                Tile tile = Protocol.tile(message, "tile");
+                requireMove(turn && round.player(seat).countInHand(tile) > 0, "不能打這張牌");
+                flow.discard(seat, id, tile);
+                break;
+            }
+            case "listen": {
+                Tile tile = Protocol.tile(message, "tile");
+                requireMove(turn && round.readyDiscards(seat).containsKey(tile), "打這張牌不會聽牌");
+                flow.declareListening(seat, id, tile);
+                break;
+            }
+            case "selfWin":
+                requireMove(turn && round.turnOptions(seat).canSelfWin(), "不能自摸");
+                flow.declareSelfWin(seat, id);
+                break;
+            case "kong": {
+                Tile tile = Protocol.tile(message, "tile");
+                requireMove(turn && canKong(round.turnOptions(seat), tile), "不能槓這張牌");
+                flow.declareKong(seat, id, tile);
+                break;
+            }
+            case "claim": {
+                List<Claim> claims = asks[seat].claims();
+                int option = Protocol.integer(message, "option");
+                requireMove(!turn && option >= 0 && option < claims.size(), "沒有這個選項");
+                flow.answerClaim(seat, id, claims.get(option));
+                break;
+            }
+            default:
+                requireMove(!turn, "現在不能過");
+                flow.answerClaim(seat, id, null);
+                break;
+        }
+    }
+
+    private static boolean canKong(TurnOptions options, Tile tile) {
+        return options.concealedKongs().contains(tile) || options.addKongs().contains(tile);
+    }
+
+    private static void requireMove(boolean allowed, String message) {
+        if (!allowed) {
+            throw new Rejected("illegalMove", message);
+        }
+    }
+
+    private void requirePlaying() {
+        if (state != State.PLAYING) {
+            throw new Rejected("notPlaying", "牌局還沒開始");
+        }
+    }
+
+    /** 全桌都不在了：都走了就關房間，只是斷線就等一下有沒有人回來。 */
+    private void closeIfAbandoned() {
+        boolean anySeated = false;
+        for (Member member : seats) {
+            if (member != null) {
+                anySeated = true;
+                if (member.connection != null) {
+                    return;
+                }
+            }
+        }
+        if (!anySeated) {
+            close("empty");
+            return;
+        }
+        cancelAbandon.run();
+        cancelAbandon = after(timing.abandonMs(), () -> close("abandoned"));
+    }
+
+    private void close(String reason) {
+        if (state == State.CLOSED) {
+            return;
+        }
+        state = State.CLOSED;
+        if (flow != null) {
+            flow.stop();
+        }
+        for (int seat = 0; seat < SEATS; seat++) {
+            Member member = seats[seat];
+            if (member != null) {
+                member.send(Protocol.object("type", "roomClosed", "reason", reason));
+                member.room = null;
+                server.forget(member);
+                seats[seat] = null;
+            }
+        }
+        server.roomClosed(this);
+        executor.shutdownNow();
+    }
+
+    /** 打完回到等人的狀態，可以再開一場；斷線的人就不等了。 */
+    private void finishGame() {
+        flow.stop();
+        flow = null;
+        session = null;
+        people = Set.of();
+        lastRoundEnd = null;
+        readySeats.clear();
+        cancelAbandon.run();
+        cancelAbandon = () -> { };
+        state = State.LOBBY;
+        List<Member> staying = new ArrayList<>();
+        for (Member member : seats) {
+            if (member == null) {
+                continue;
+            }
+            member.wantsAutoPlay = false;
+            if (member.connection != null) {
+                staying.add(member);
+            } else {
+                member.room = null;
+                server.forget(member);
+            }
+        }
+        reseat(staying);
+    }
+
+    private void post(Runnable task) {
+        try {
+            executor.execute(guard(task));
+        } catch (RejectedExecutionException closed) {
+            // 房間已經關了，裡面的人都收過 roomClosed
+        }
+    }
+
+    private Runnable after(int delayMs, Runnable action) {
+        ScheduledFuture<?> future = executor.schedule(guard(action), delayMs, TimeUnit.MILLISECONDS);
+        return () -> future.cancel(false);
+    }
+
+    /** 牌局流程出錯之後接不回來，留著只會讓全桌空等，所以關房間。 */
+    private Runnable guard(Runnable task) {
+        return () -> {
+            if (state == State.CLOSED) {
+                return;
+            }
+            try {
+                task.run();
+            } catch (RuntimeException | Error bug) {
+                EzmjServer.log("房間 " + code + " 發生錯誤，關閉房間", bug);
+                close("serverError");
+            }
+        };
+    }
+
+    private void broadcast(Map<String, Object> message) {
+        for (Member member : seats) {
+            if (member != null) {
+                member.send(message);
+            }
+        }
+    }
+
+    private void broadcastRoom() {
+        for (Member member : seats) {
+            if (member != null) {
+                member.send(roomMessage(member));
+            }
+        }
+    }
+
+    private Map<String, Object> roomMessage(Member viewer) {
+        List<Object> players = new ArrayList<>();
+        for (int seat = 0; seat < SEATS; seat++) {
+            Member member = seats[seat];
+            boolean human = state == State.PLAYING ? people.contains(seat) : member != null;
+            if (state != State.PLAYING && member == null) {
+                continue;
+            }
+            players.add(Protocol.object(
+                    "seat", seat,
+                    "name", state == State.PLAYING ? names[seat] : member.name,
+                    "human", human,
+                    "connected", member != null && member.connection != null,
+                    "gender", human ? null : session.player(seat).gender().name()));
+        }
+        return Protocol.object(
+                "type", "room",
+                "code", code,
+                "state", state == State.PLAYING ? "playing" : "lobby",
+                "yourSeat", viewer.seat,
+                "options", options.toMessage(),
+                "players", players);
+    }
+
+    private void sendState(int seat) {
+        Member member = seats[seat];
+        if (member != null) {
+            member.send(Views.state(flow.round(), seat, flow.listeningWaits(seat), flow.isAutoPlay(seat)));
+        }
+    }
+
+    private void sendStates() {
+        for (int seat = 0; seat < SEATS; seat++) {
+            sendState(seat);
+        }
+    }
+
+    /** 引擎的 log 裡真人是電腦的名字，客戶端從事件自己組文字。 */
+    @Override
+    public void log(String message) {
+    }
+
+    @Override
+    public void roundOpened(Round round) {
+        broadcast(Protocol.object(
+                "type", "roundStart",
+                "number", session.roundsPlayed() + 1,
+                "dealer", round.dealer(),
+                "roundWind", round.roundWind(),
+                "streak", round.streak(),
+                "dealMs", timing.dealMs()));
+    }
+
+    @Override
+    public int dealt(Round round) {
+        if (round.phase() == Round.Phase.FINISHED) {
+            return 0;
+        }
+        sendStates();
+        return timing.dealMs();
+    }
+
+    @Override
+    public void event(RoundEvent event) {
+        for (Member member : seats) {
+            if (member != null) {
+                member.send(Views.event(event, member.seat));
+            }
+        }
+    }
+
+    @Override
+    public void refresh(Round round) {
+        sendStates();
+    }
+
+    @Override
+    public void idle(int seat) {
+    }
+
+    /** 服務器不存檔，重開服務器牌局就沒了。 */
+    @Override
+    public void checkpoint() {
+    }
+
+    @Override
+    public void askTurn(int seat, int waitId, TurnOptions turnOptions) {
+        send(seat, new Ask(waitId, Views.askTurn(waitId, turnOptions, flow.round().readyDiscards(seat)), List.of()));
+    }
+
+    @Override
+    public void askClaim(int seat, int waitId, List<Claim> claims) {
+        send(seat, new Ask(waitId, Views.askClaim(waitId, flow.round(), claims), claims));
+    }
+
+    private void send(int seat, Ask ask) {
+        asks[seat] = ask;
+        if (seats[seat] != null) {
+            seats[seat].send(ask.message());
+        }
+    }
+
+    @Override
+    public void secondsLeft(int seconds) {
+        broadcast(Protocol.object("type", "countdown", "seconds", seconds));
+    }
+
+    /** 聽牌只有自己知道，由 refresh 的 state 帶給本人。 */
+    @Override
+    public void listening(int seat) {
+    }
+
+    @Override
+    public void thinkingFinished(int seat) {
+    }
+
+    @Override
+    public void roundFinished(Round round, Settlement settlement) {
+        boolean over = session.isOver();
+        int nextMs = over ? 0 : round.result().isDrawnGame() ? timing.drawnResultMs() : timing.resultMs();
+        Map<String, Object> result = Views.roundEnd(round, settlement, over, nextMs);
+        broadcast(result);
+        if (over) {
+            broadcast(Views.gameOver(session, names));
+            finishGame();
+            return;
+        }
+        lastRoundEnd = result;
+        cancelNextRound = after(nextMs, this::startNextRound);
+    }
+}
