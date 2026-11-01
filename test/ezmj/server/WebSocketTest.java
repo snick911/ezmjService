@@ -116,15 +116,15 @@ final class WebSocketTest {
     }
 
     private static void test(String name, Scenario scenario) {
-        T.test(name, () -> {
-            EzmjServer server = new EzmjServer(0, FAST);
+        T.test(name, () -> T.inTempFolder(folder -> {
+            EzmjServer server = new EzmjServer(0, FAST, HonorStore.file(folder.resolve("honor.properties")));
             server.start();
             try {
                 scenario.run(server.port());
             } finally {
                 server.stop();
             }
-        });
+        }));
     }
 
     private static HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {

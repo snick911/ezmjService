@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -16,6 +17,7 @@ final class ServerTest {
 
     /** 電腦不停頓，結果畫面也很短。 */
     private static final Timing FAST = new Timing(0, 30, 30, 300, true);
+    private static final List<String> HONOR_CATEGORIES = List.of("wins", "selfDraws", "winnings", "dealIns");
 
     private ServerTest() {
     }
@@ -230,6 +232,28 @@ final class ServerTest {
                 closeAll(clients);
             }
         });
+        test("玩家不能開電腦代打，房間裡或牌局中都一樣", port -> {
+            List<TestClient> clients = seatedClients(port, 1);
+            try {
+                TestClient host = clients.get(0);
+                host.send("type", "autoPlay", "on", true);
+                T.eq("autoPlayNotAllowed", host.next("error").get("code"), "開局前");
+                host.send("type", "start");
+                Map<String, Object> first = untilAskTurn(host);
+                host.send("type", "autoPlay", "on", true);
+                T.eq("autoPlayNotAllowed", host.next("error").get("code"), "牌局中");
+                T.eq(false, lastOfType(host, "state").get("autoPlay"), "代打還是關著");
+                List<?> hand = (List<?>) lastOfType(host, "state").get("hand");
+                host.send("type", "discard", "waitId", first.get("waitId"), "tile", hand.get(hand.size() - 1));
+                untilAskTurn(host);
+            } finally {
+                closeAll(clients);
+            }
+        });
+        test("下一局的等待：一般 15 秒，流局 5 秒", port -> {
+            T.eq(15_000, Timing.NORMAL.resultMs(), "一般");
+            T.eq(5_000, Timing.NORMAL.drawnResultMs(), "流局");
+        });
         test("倒數到了自動打牌", port -> {
             List<TestClient> clients = seatedClients(port, 1, "waitSeconds", 5);
             try {
@@ -251,12 +275,12 @@ final class ServerTest {
             try {
                 guest.send("type", "hello", "protocol", Protocol.VERSION, "name", "乙");
                 String token = (String) guest.next("welcome").get("token");
-                String code = createRoom(host);
+                // 房主不回應，靠倒數讓牌局往下走
+                String code = createRoom(host, "waitSeconds", 5);
                 guest.send("type", "joinRoom", "code", code);
                 guest.next("room");
                 host.send("type", "start");
                 until(host, "room", m -> "playing".equals(m.get("state")));
-                host.send("type", "autoPlay", "on", true);
                 guest.close();
                 Map<String, Object> room = until(host, "room", m -> !isConnected(m, 1));
                 T.check(isConnected(room, 0), "房主還連著");
@@ -313,19 +337,133 @@ final class ServerTest {
                 T.eq("unknownToken", back.next("error").get("code"), "token 失效");
             }
         });
+
+        T.section("榮譽榜");
+        test("還沒有人打完時榜是空的，查榜不用登入", port -> {
+            Map<String, Object> honors = honorRoll(port);
+            for (String category : HONOR_CATEGORIES) {
+                T.check(((List<?>) honors.get(category)).isEmpty(), category + " 要是空的");
+            }
+        });
+        test("打完一場就記下四位真人的成績，用的是他們自己的名字", port -> {
+            List<TestClient> clients = seatedClients(port, 4, "chips", 100);
+            try {
+                clients.get(0).send("type", "start");
+                Map<String, Object> gameOver = playAll(clients).get(0);
+                Map<String, Object> honors = honorRoll(port);
+                T.check(!((List<?>) honors.get("wins")).isEmpty(), "四位都是真人，一定有人胡牌");
+                for (String category : HONOR_CATEGORIES) {
+                    checkHonorsMatch(category, honors, gameOver);
+                }
+            } finally {
+                closeAll(clients);
+            }
+        });
+        test("中途離開的人不列入，電腦也不列入", port -> {
+            List<TestClient> clients = seatedClients(port, 4, "chips", 100);
+            try {
+                TestClient host = clients.get(0);
+                host.send("type", "start");
+                until(host, "room", m -> "playing".equals(m.get("state")));
+                for (TestClient guest : clients.subList(1, 4)) {
+                    guest.send("type", "leave");
+                    guest.next("left");
+                }
+                playAll(List.of(host));
+                checkHonorsOnlyFrom(port, Set.of("玩家0"));
+            } finally {
+                closeAll(clients);
+            }
+        });
+        test("斷線由電腦接手過的人，接回來打完也不列入", port -> {
+            TestClient host = TestClient.login(port, "甲");
+            TestClient guest = new TestClient(port);
+            try {
+                guest.send("type", "hello", "protocol", Protocol.VERSION, "name", "乙");
+                String token = (String) guest.next("welcome").get("token");
+                String code = createRoom(host, "chips", 100);
+                guest.send("type", "joinRoom", "code", code);
+                guest.next("room");
+                host.send("type", "start");
+                until(guest, "room", m -> "playing".equals(m.get("state")));
+                guest.close();
+                awaitSeen(host, m -> "room".equals(m.get("type")) && "playing".equals(m.get("state")) && !isConnected(m, 1));
+                try (TestClient back = new TestClient(port)) {
+                    back.send("type", "hello", "protocol", Protocol.VERSION, "token", token);
+                    back.next("welcome");
+                    playAll(List.of(host, back));
+                }
+                checkHonorsOnlyFrom(port, Set.of("甲"));
+            } finally {
+                host.close();
+                guest.close();
+            }
+        });
+    }
+
+    private static Map<String, Object> honorRoll(int port) throws IOException {
+        try (TestClient client = new TestClient(port)) {
+            client.send("type", "honorRoll");
+            return client.next("honorRoll");
+        }
+    }
+
+    /** 不消耗訊息，只看收到過的，打牌的迴圈之後還是收得到每一則。 */
+    private static void awaitSeen(TestClient client, Predicate<Map<String, Object>> wanted) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (System.currentTimeMillis() < deadline) {
+            synchronized (client.seen) {
+                for (Map<String, Object> message : client.seen) {
+                    if (wanted.test(message)) {
+                        return;
+                    }
+                }
+            }
+            Thread.sleep(5);
+        }
+        throw new AssertionError("等太久沒有看到要的訊息");
+    }
+
+    /** 這個類別的數值大於 0 的真人都要上榜，數值、名字都和 gameOver 一樣。 */
+    @SuppressWarnings("unchecked")
+    private static void checkHonorsMatch(String category, Map<String, Object> honors, Map<String, Object> gameOver) {
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) honors.get(category);
+        int expected = 0;
+        for (Map<String, Object> standing : (List<Map<String, Object>>) gameOver.get("standings")) {
+            if ((Long) standing.get(category) <= 0) {
+                continue;
+            }
+            expected++;
+            boolean listed = false;
+            for (Map<String, Object> entry : entries) {
+                listed |= standing.get("name").equals(entry.get("name")) && standing.get(category).equals(entry.get(category));
+            }
+            T.check(listed, category + " 沒有 " + standing);
+        }
+        T.eq(expected, entries.size(), category + " 的筆數");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void checkHonorsOnlyFrom(int port, Set<String> names) throws IOException {
+        Map<String, Object> honors = honorRoll(port);
+        for (String category : HONOR_CATEGORIES) {
+            for (Map<String, Object> entry : (List<Map<String, Object>>) honors.get(category)) {
+                T.check(names.contains(entry.get("name")), category + " 不該有 " + entry);
+            }
+        }
     }
 
     /** 每個案例一台新的服務器。 */
     private static void test(String name, Scenario scenario) {
-        T.test(name, () -> {
-            EzmjServer server = new EzmjServer(0, FAST);
+        T.test(name, () -> T.inTempFolder(folder -> {
+            EzmjServer server = new EzmjServer(0, FAST, HonorStore.file(folder.resolve("honor.properties")));
             server.start();
             try {
                 scenario.run(server.port());
             } finally {
                 server.stop();
             }
-        });
+        }));
     }
 
     private static String createRoom(TestClient host, Object... options) throws IOException {
@@ -404,9 +542,8 @@ final class ServerTest {
         }
     }
 
-    /** 前幾個決定自己做，走過一輪打牌與宣告之後交給代打，不然傻傻打可能一直流局。 */
+    /** 朝胡牌打：打最孤立的牌，能吃碰就吃碰，不然傻傻打可能一直流局。 */
     private static Map<String, Object> playUntilOver(TestClient client) throws Exception {
-        int manual = 5;
         Map<String, Object> state = null;
         while (true) {
             Map<String, Object> message = client.poll();
@@ -418,13 +555,10 @@ final class ServerTest {
                     state = message;
                     break;
                 case "askTurn":
-                    if (manual-- <= 0) {
-                        client.send("type", "autoPlay", "on", true);
-                    } else if (Boolean.TRUE.equals(message.get("canSelfWin"))) {
+                    if (Boolean.TRUE.equals(message.get("canSelfWin"))) {
                         client.send("type", "selfWin", "waitId", message.get("waitId"));
                     } else {
-                        List<?> hand = (List<?>) state.get("hand");
-                        client.send("type", "discard", "waitId", message.get("waitId"), "tile", hand.get(hand.size() - 1));
+                        client.send("type", "discard", "waitId", message.get("waitId"), "tile", loneliestTile((List<?>) state.get("hand")));
                     }
                     break;
                 case "askClaim":
@@ -447,7 +581,31 @@ final class ServerTest {
         }
     }
 
-    /** 能胡就胡，其他都過。 */
+    /** 同樣的牌與前後的牌越少越孤立。牌寫成 1w 這樣，字牌沒有前後。 */
+    private static Object loneliestTile(List<?> hand) {
+        Object loneliest = null;
+        int fewest = Integer.MAX_VALUE;
+        for (Object tile : hand) {
+            String code = (String) tile;
+            int score = 0;
+            for (Object other : hand) {
+                String otherCode = (String) other;
+                if (tile != other) {
+                    int distance = Math.abs(code.charAt(0) - otherCode.charAt(0));
+                    if (code.charAt(1) == otherCode.charAt(1) && (distance == 0 || (code.charAt(1) != 'z' && distance <= 2))) {
+                        score += distance == 0 ? 4 : 3 - distance;
+                    }
+                }
+            }
+            if (score < fewest) {
+                fewest = score;
+                loneliest = tile;
+            }
+        }
+        return loneliest;
+    }
+
+    /** 能胡就胡，不然就吃碰槓，手牌才會往胡牌靠近。 */
     private static void answerClaim(TestClient client, Map<String, Object> ask) throws IOException {
         List<?> options = (List<?>) ask.get("options");
         for (int i = 0; i < options.size(); i++) {
@@ -456,7 +614,7 @@ final class ServerTest {
                 return;
             }
         }
-        client.send("type", "pass", "waitId", ask.get("waitId"));
+        client.send("type", "claim", "waitId", ask.get("waitId"), "option", 0);
     }
 
     private static TestClient firstAskTurn(List<TestClient> clients) throws Exception {

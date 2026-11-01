@@ -1,0 +1,181 @@
+package ezmj.server;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+import ezmj.model.BotLevel;
+import ezmj.model.GameRecord;
+import ezmj.model.HonorRoll;
+
+/**
+ * 服務器的榮譽榜：真人打完一場的成績，每個類別留下最好的十筆，排序與格式都用引擎的 HonorRoll。
+ * 每間房間有自己的執行緒，又可能同時打完，所以記憶體裡的榜要同步。
+ * 存取 HonorStore 可能要等網路，都放在另一條執行緒上，不能卡住牌桌。
+ * 還沒讀到存過的紀錄之前絕對不寫回，不然舊紀錄會被蓋掉；這段時間打完的成績等讀到之後再併進去。
+ */
+final class HonorBoard {
+
+    private static final int SYNC_ATTEMPTS = 5;
+    private static final int CLOSE_WAIT_SECONDS = 5;
+
+    private final HonorStore store;
+    private final int retryMs;
+    private final ScheduledThreadPoolExecutor worker;
+    private HonorRoll roll = new HonorRoll();
+    private boolean loaded;
+    private boolean dirty;
+
+    /** 先試著讀一次才回來，這樣服務器開始接連線時榜就是好的。 */
+    HonorBoard(HonorStore store, int retryMs) {
+        this.store = store;
+        this.retryMs = retryMs;
+        this.worker = new ScheduledThreadPoolExecutor(1, task -> {
+            Thread thread = new Thread(task, "ezmj-honor");
+            thread.setDaemon(true);
+            return thread;
+        });
+        worker.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        sync(SYNC_ATTEMPTS);
+    }
+
+    synchronized void add(List<GameRecord> records) {
+        boolean changed = false;
+        for (GameRecord record : records) {
+            changed |= !roll.add(record).isEmpty();
+        }
+        if (changed) {
+            dirty = true;
+            try {
+                worker.execute(() -> sync(SYNC_ATTEMPTS));
+            } catch (RejectedExecutionException closed) {
+                // 服務器正在關閉，close 會再存最後一次
+            }
+        }
+    }
+
+    synchronized Map<String, Object> toMessage() {
+        return Protocol.object(
+                "type", "honorRoll",
+                "wins", entries(HonorRoll.Category.WINS),
+                "selfDraws", entries(HonorRoll.Category.SELF_DRAWS),
+                "winnings", entries(HonorRoll.Category.WINNINGS),
+                "dealIns", entries(HonorRoll.Category.DEAL_INS));
+    }
+
+    /** 等手上的存檔做完，再把還沒存到的存最後一次。 */
+    void close() {
+        worker.shutdown();
+        try {
+            worker.awaitTermination(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        sync(1);
+    }
+
+    /** 存不了只記在 log，成績還留在記憶體裡，等一下再試，之後有新紀錄也會再存一次，牌局不受影響。 */
+    private void sync(int attempts) {
+        try {
+            loadSaved();
+            save();
+        } catch (IOException | RuntimeException e) {
+            EzmjServer.log("榮譽榜同步失敗，還會再試 " + (attempts - 1) + " 次：" + e);
+            if (attempts > 1 && !worker.isShutdown()) {
+                worker.schedule(() -> sync(attempts - 1), retryMs, TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    /** 啟動後才打完的成績不會在存檔裡，所以併進去時不會重複。不在前十名的一定也進不了合併後的前十名。 */
+    private void loadSaved() throws IOException {
+        synchronized (this) {
+            if (loaded) {
+                return;
+            }
+        }
+        String saved = store.read();
+        synchronized (this) {
+            HonorRoll merged = parse(saved);
+            Set<GameRecord> mine = new LinkedHashSet<>();
+            for (HonorRoll.Category category : HonorRoll.Category.values()) {
+                mine.addAll(roll.top(category));
+            }
+            mine.forEach(merged::add);
+            roll = merged;
+            loaded = true;
+        }
+    }
+
+    private void save() throws IOException {
+        String content;
+        synchronized (this) {
+            if (!dirty) {
+                return;
+            }
+            content = render(roll);
+            dirty = false;
+        }
+        try {
+            store.write(content);
+        } catch (IOException | RuntimeException e) {
+            synchronized (this) {
+                dirty = true;
+            }
+            throw e;
+        }
+    }
+
+    /** HonorRoll 只會讀寫檔案，所以經過一個暫存檔。 */
+    private static HonorRoll parse(String content) throws IOException {
+        if (content == null) {
+            return new HonorRoll();
+        }
+        Path temp = Files.createTempFile("ezmj-honor", ".properties");
+        try {
+            Files.writeString(temp, content);
+            return HonorRoll.load(temp);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+    }
+
+    private static String render(HonorRoll roll) throws IOException {
+        Path temp = Files.createTempFile("ezmj-honor", ".properties");
+        try {
+            roll.save(temp);
+            return Files.readString(temp);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+    }
+
+    private List<Object> entries(HonorRoll.Category category) {
+        List<Object> list = new ArrayList<>();
+        for (GameRecord record : roll.top(category)) {
+            List<String> levels = new ArrayList<>();
+            for (BotLevel level : record.botLevels()) {
+                levels.add(level.name());
+            }
+            list.add(Protocol.object(
+                    "name", record.name(),
+                    "date", record.date(),
+                    "wins", record.wins(),
+                    "selfDraws", record.selfDraws(),
+                    "winnings", record.winnings(),
+                    "dealIns", record.dealIns(),
+                    "botLevels", levels,
+                    "basePay", record.basePay(),
+                    "taiPay", record.taiPay()));
+        }
+        return list;
+    }
+}

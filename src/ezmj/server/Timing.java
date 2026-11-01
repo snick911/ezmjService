@@ -7,5 +7,5 @@ package ezmj.server;
  */
 record Timing(int dealMs, int resultMs, int drawnResultMs, int abandonMs, boolean instantBots) {
 
-    static final Timing NORMAL = new Timing(3_000, 60_000, 10_000, 120_000, false);
+    static final Timing NORMAL = new Timing(3_000, 15_000, 5_000, 120_000, false);
 }

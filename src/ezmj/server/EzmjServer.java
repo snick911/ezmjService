@@ -3,6 +3,7 @@ package ezmj.server;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
@@ -17,6 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class EzmjServer implements Connection.Handler {
 
     static final int DEFAULT_PORT = 7788;
+    private static final String DEFAULT_HONOR_FILE = "honor-roll.properties";
+    private static final int HONOR_RETRY_MS = 60_000;
     private static final int MAX_CONNECTIONS = 2_000;
     private static final int MAX_ROOMS = 500;
     private static final int MAX_NAME_LENGTH = 16;
@@ -27,6 +30,7 @@ public final class EzmjServer implements Connection.Handler {
 
     private final int requestedPort;
     private final Timing timing;
+    private final HonorBoard honorBoard;
     private final SecureRandom random = new SecureRandom();
     private final Set<Connection> connections = ConcurrentHashMap.newKeySet();
     private final Map<String, Member> members = new ConcurrentHashMap<>();
@@ -43,7 +47,9 @@ public final class EzmjServer implements Connection.Handler {
             System.exit(2);
         }
         int port = args.length == 1 ? Integer.parseInt(args[0]) : portFromEnvironment();
-        EzmjServer server = new EzmjServer(port, Timing.NORMAL);
+        EzmjServer server = new EzmjServer(port, Timing.NORMAL, honorStoreFromEnvironment());
+        // 部署或休眠時主機會要程式結束，剛打完還沒存到的成績要趕上
+        Runtime.getRuntime().addShutdownHook(new Thread(server.honorBoard()::close, "ezmj-shutdown"));
         server.start();
         log("EZMJ Server " + ServerVersion.get() + " 在 port " + server.port() + " 等待連線");
     }
@@ -54,10 +60,37 @@ public final class EzmjServer implements Connection.Handler {
         return port == null || port.isBlank() ? DEFAULT_PORT : Integer.parseInt(port.strip());
     }
 
+    /**
+     * 有設定 Gist 就存 Gist，不然存檔案。只設定一半一定是打錯了，
+     * 這時不能改存檔案，不然在 Render 上紀錄會默默留不住，所以直接停止。
+     */
+    private static HonorStore honorStoreFromEnvironment() {
+        String gistId = environment("EZMJ_GIST_ID");
+        String gistToken = environment("EZMJ_GIST_TOKEN");
+        if ((gistId == null) != (gistToken == null)) {
+            System.err.println("EZMJ_GIST_ID 與 EZMJ_GIST_TOKEN 要一起設定");
+            System.exit(2);
+        }
+        if (gistId != null) {
+            log("榮譽榜存在 Gist " + gistId);
+            return new GistStore(GistStore.GITHUB_API, gistId, gistToken);
+        }
+        String file = environment("EZMJ_HONOR_FILE");
+        Path path = Path.of(file == null ? DEFAULT_HONOR_FILE : file);
+        log("榮譽榜存在檔案 " + path.toAbsolutePath());
+        return HonorStore.file(path);
+    }
+
+    private static String environment(String name) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? null : value.strip();
+    }
+
     /** port 給 0 時由系統挑一個沒人用的。 */
-    EzmjServer(int port, Timing timing) {
+    EzmjServer(int port, Timing timing, HonorStore honorStore) {
         this.requestedPort = port;
         this.timing = timing;
+        this.honorBoard = new HonorBoard(honorStore, HONOR_RETRY_MS);
     }
 
     /** accept 的執行緒不是 daemon，main 回傳後程式還會繼續跑。 */
@@ -74,6 +107,7 @@ public final class EzmjServer implements Connection.Handler {
         serverSocket.close();
         rooms.values().forEach(Room::shutdown);
         connections.forEach(Connection::close);
+        honorBoard.close();
     }
 
     static void log(String message) {
@@ -118,6 +152,8 @@ public final class EzmjServer implements Connection.Handler {
         String type = Protocol.string(message, "type");
         if (type.equals("ping")) {
             connection.send(Protocol.object("type", "pong"));
+        } else if (type.equals("honorRoll")) {
+            connection.send(honorBoard.toMessage());
         } else if (type.equals("hello")) {
             hello(connection, message);
         } else {
@@ -282,6 +318,10 @@ public final class EzmjServer implements Connection.Handler {
         if (member.connection == null) {
             members.remove(member.token);
         }
+    }
+
+    HonorBoard honorBoard() {
+        return honorBoard;
     }
 
     void roomClosed(Room room) {

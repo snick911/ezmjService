@@ -1,6 +1,8 @@
 package ezmj.server;
 
 import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -27,6 +29,7 @@ import ezmj.engine.Settlement;
 import ezmj.engine.TurnOptions;
 import ezmj.model.BotLevel;
 import ezmj.model.GameConfig;
+import ezmj.model.GameRecord;
 import ezmj.model.Tile;
 import ezmj.table.TableFlow;
 
@@ -36,12 +39,14 @@ import ezmj.table.TableFlow;
  *
  * 真人從座位 0 往後坐，開局前有人離開就往前補，所以座位 0 一定是真人，也是房主；
  * 引擎的 SeatedBots 只替座位 1 到 3 決定，靠這點才接得上。
- * 牌局中斷線或離開的人由電腦代打，座位不變。
+ * 玩家不能自己開電腦代打；只有牌局中斷線或離開的人才由電腦接手，座位不變，牌桌才不會卡住。
  */
 final class Room implements TableFlow.Listener {
 
     private static final int SEATS = 4;
     private static final int JOIN_TIMEOUT_SECONDS = 10;
+    /** 榮譽榜上的日期。主機多半是 UTC，所以不能用系統時區。 */
+    private static final ZoneId RECORD_ZONE = ZoneId.of("Asia/Taipei");
 
     private enum State { LOBBY, PLAYING, CLOSED }
 
@@ -57,6 +62,8 @@ final class Room implements TableFlow.Listener {
     private final Member[] seats = new Member[SEATS];
     private final Ask[] asks = new Ask[SEATS];
     private final Set<Integer> readySeats = new HashSet<>();
+    /** 這場曾經由電腦接手的座位，就算接回來了成績也不算本人的。 */
+    private final Set<Integer> takenOver = new HashSet<>();
 
     private State state = State.LOBBY;
     private GameSession session;
@@ -135,6 +142,7 @@ final class Room implements TableFlow.Listener {
                 return;
             }
             flow.setAutoPlay(member.seat, true);
+            takenOver.add(member.seat);
             broadcastRoom();
             closeIfAbandoned();
         });
@@ -149,7 +157,7 @@ final class Room implements TableFlow.Listener {
             cancelAbandon.run();
             cancelAbandon = () -> { };
             if (state == State.PLAYING) {
-                flow.setAutoPlay(member.seat, member.wantsAutoPlay);
+                flow.setAutoPlay(member.seat, false);
             }
             broadcastRoom();
             if (state == State.PLAYING) {
@@ -179,8 +187,8 @@ final class Room implements TableFlow.Listener {
                 startGame(member);
                 break;
             case "autoPlay":
-                setAutoPlay(member, Protocol.bool(message, "on"));
-                break;
+                // 舊版客戶端還有這顆按鈕，告訴玩家為什麼沒有作用
+                throw new Rejected("autoPlayNotAllowed", "多人遊戲不能使用電腦代打");
             case "ready":
                 markReady(member);
                 break;
@@ -207,7 +215,6 @@ final class Room implements TableFlow.Listener {
         }
         seats[seat] = member;
         member.seat = seat;
-        member.wantsAutoPlay = false;
         member.room = this;
         broadcastRoom();
     }
@@ -229,6 +236,7 @@ final class Room implements TableFlow.Listener {
             return;
         }
         flow.setAutoPlay(member.seat, true);
+        takenOver.add(member.seat);
         seats[member.seat] = null;
         member.room = null;
         member.send(Protocol.object("type", "left"));
@@ -308,13 +316,6 @@ final class Room implements TableFlow.Listener {
         state = State.PLAYING;
         broadcastRoom();
         flow.startRound();
-    }
-
-    private void setAutoPlay(Member member, boolean on) {
-        requirePlaying();
-        member.wantsAutoPlay = on;
-        flow.setAutoPlay(member.seat, on);
-        sendState(member.seat);
     }
 
     private void markReady(Member member) {
@@ -445,6 +446,23 @@ final class Room implements TableFlow.Listener {
         executor.shutdownNow();
     }
 
+    /**
+     * 打到結束才記錄，電腦和由電腦接手過的座位都不算。
+     * 引擎只知道房主的名字，所以名字要換成開局時定下的。
+     */
+    private void recordHonors() {
+        String date = LocalDate.now(RECORD_ZONE).toString();
+        List<GameRecord> records = new ArrayList<>();
+        for (int seat = 0; seat < SEATS; seat++) {
+            if (people.contains(seat) && !takenOver.contains(seat)) {
+                GameRecord record = session.record(seat, date);
+                records.add(new GameRecord(names[seat], date, record.wins(), record.selfDraws(), record.winnings(),
+                        record.dealIns(), record.botLevels(), record.basePay(), record.taiPay()));
+            }
+        }
+        server.honorBoard().add(records);
+    }
+
     /** 打完回到等人的狀態，可以再開一場；斷線的人就不等了。 */
     private void finishGame() {
         flow.stop();
@@ -453,6 +471,7 @@ final class Room implements TableFlow.Listener {
         people = Set.of();
         lastRoundEnd = null;
         readySeats.clear();
+        takenOver.clear();
         cancelAbandon.run();
         cancelAbandon = () -> { };
         state = State.LOBBY;
@@ -461,7 +480,6 @@ final class Room implements TableFlow.Listener {
             if (member == null) {
                 continue;
             }
-            member.wantsAutoPlay = false;
             if (member.connection != null) {
                 staying.add(member);
             } else {
@@ -639,6 +657,8 @@ final class Room implements TableFlow.Listener {
         Map<String, Object> result = Views.roundEnd(round, settlement, over, nextMs);
         broadcast(result);
         if (over) {
+            // 先記錄，客戶端看到 gameOver 馬上查榜才查得到這場
+            recordHonors();
             broadcast(Views.gameOver(session, names));
             finishGame();
             return;

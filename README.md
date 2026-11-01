@@ -14,6 +14,7 @@ java -jar ezmj-server-<版號>.jar [port]
 
 - 服務器本身不加密，也沒有帳號，玩家的身分只靠服務器發的 token。對外開放要放在有 TLS 的主機後面，例如 Render。
 - 牌局只存在記憶體裡，重開服務器牌局就沒了。
+- 榮譽榜預設存成檔案，路徑看環境變數 `EZMJ_HONOR_FILE`，沒有指定就是目前資料夾的 `honor-roll.properties`。同時設定 `EZMJ_GIST_ID` 與 `EZMJ_GIST_TOKEN` 就改存 GitHub Gist，只設定一個會直接停止。
 
 ## 部署到 Render
 
@@ -22,6 +23,11 @@ java -jar ezmj-server-<版號>.jar [port]
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
+- 目前用免費方案，不能掛硬碟，容器的檔案系統在重新部署或服務休眠之後就清空了，所以榮譽榜存在 GitHub Gist：
+  1. 到 <https://gist.github.com> 建立一個 secret gist，檔名 `honor-roll.properties`，內容隨便打一行 `# EZMJ`。網址最後一段就是 Gist ID。
+  2. 到 GitHub 的 Settings → Developer settings 建立 token，只給 Gists 的讀寫權限。
+  3. 在 Render 的 Environment 設定 `EZMJ_GIST_ID` 與 `EZMJ_GIST_TOKEN`。token 不要寫進程式或 commit。
+- 服務器啟動時從 Gist 讀榜，有新紀錄就在背景寫回，失敗會每分鐘再試，最多五次。讀不到 Gist 時絕對不會寫回，不會蓋掉舊紀錄；這段時間打完的成績等讀到之後再合併。一直寫不進去的話，那些成績在下次休眠或部署後就沒了，已經寫進 Gist 的不受影響。
 
 ## 建置與打包
 
@@ -77,6 +83,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上 |
 | `Views` | 把局面轉成送給某個座位的訊息，防作弊的關卡 |
 | `RoomOptions` | 房間設定與檢查 |
+| `HonorBoard` | 榮譽榜：記下打完的成績、在背景同步、組成訊息。排序與內容格式用引擎的 `ezmj.model.HonorRoll` |
+| `HonorStore`、`GistStore` | 榮譽榜存在哪裡：檔案或 GitHub Gist |
 | `Protocol`、`Json` | 組訊息、讀欄位、最小的 JSON |
 
 ## 連線協定
@@ -99,12 +107,13 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `type` | 其他欄位 | 說明 |
 |---|---|---|
 | `ping` | | 回 `pong`，不用登入 |
+| `honorRoll` | | 回 `honorRoll`，不用登入 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`（1 到 16 字），斷線重連帶 `token` |
 | `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
 | `joinRoom` | `code` | 用房號加入，開打之後不能加入 |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
-| `autoPlay` | `on` | 電腦代打的開關 |
+| `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
 | `discard` | `waitId`、`tile` | 打牌 |
 | `listen` | `waitId`、`tile` | 打這張牌並進入聽牌模式，之後自動摸打、自動胡，不再吃碰槓 |
@@ -131,6 +140,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `type` | 欄位 | 說明 |
 |---|---|---|
 | `pong` | | |
+| `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記打到結束的真人，中途離開或斷線由電腦接手過的座位不列入 |
 | `welcome` | `protocol`、`version`、`token`、`name`、`room` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人 |
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
 | `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
@@ -142,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」 |
 | `askClaim` | `waitId`、`tile`、`from`、`robbing`、`options` | 別人打出或加槓的牌可以宣告。`options` 每項有 `kind`（`WIN`、`KONG`、`PONG`、`CHOW`）、`tile`、`fromHand` |
 | `countdown` | `seconds` | 這次等待還剩幾秒，全桌都會收到 |
-| `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數，`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局 |
+| `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數，`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 5 秒） |
 | `gameOver` | `reason`（`roundsComplete`、`bankrupt`）、`rounds`、`drawnGames`、`standings` | 整場結束，接著房間回到 `lobby`，可以再開一場。`standings` 依名次排，每項有 `rank`、`seat`、`name`、`chips`、`winnings`、`wins`、`selfDraws`、`dealIns` |
 
 `state` 的欄位：
@@ -154,14 +164,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `dealer`、`streak`、`roundWind`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、自己的門風、牌牆剩幾張 |
 | `hand`、`drawn`、`melds`、`flowers`、`discards`、`chips` | 自己的手牌、剛摸的牌（已經算在 `hand` 裡）、面子、花牌、牌河、籌碼 |
 | `claimTile`、`discarder`、`robbing` | 等宣告的牌、打出的人、是不是搶槓 |
-| `listeningWaits`、`autoPlay` | 自己在聽牌模式等的牌（沒有時是 null）、自己的代打開關。別家不會知道 |
+| `listeningWaits`、`autoPlay` | 自己在聽牌模式等的牌（沒有時是 null）、留給舊版客戶端的欄位，連線中的玩家一定是 false。別家不會知道 |
 | `opponents` | 另外三家，從下家起算。每項有 `seat`、`handCount`、`melds`（不含暗槓）、`concealedKongs`（暗槓組數）、`flowers`、`discards`、`chips` |
 
 `melds` 每項有 `kind`（`CHOW`、`PONG`、`OPEN_KONG`、`CONCEALED_KONG`）與 `tiles`。
 
 ### 斷線重連
 
-牌局中斷線，座位由電腦代打，其他人會收到 `connected` 變成 false 的 `room`。用同一個 `token` 送 `hello` 就接回來：依序收到 `welcome`、`room`、`state`，如果這局已經結束還會收到 `roundEnd`，如果正在等你決定還會收到詢問。玩家自己開的代打會保留，斷線造成的代打會關掉。
+牌局中斷線，座位由電腦代打，其他人會收到 `connected` 變成 false 的 `room`。用同一個 `token` 送 `hello` 就接回來：依序收到 `welcome`、`room`、`state`，如果這局已經結束還會收到 `roundEnd`，如果正在等你決定還會收到詢問。接回來就換回玩家自己打。
 
 同一個 token 有新連線時，舊連線會被關閉。還沒開局時斷線就等於離開房間，token 也跟著失效。全桌都斷線超過 2 分鐘就關房間。
 
