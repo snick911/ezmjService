@@ -42,10 +42,16 @@ public final class EzmjServer implements Connection.Handler {
             System.err.println("用法：java -jar ezmj-server.jar [port]");
             System.exit(2);
         }
-        int port = args.length == 1 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
+        int port = args.length == 1 ? Integer.parseInt(args[0]) : portFromEnvironment();
         EzmjServer server = new EzmjServer(port, Timing.NORMAL);
         server.start();
         log("EZMJ Server " + ServerVersion.get() + " 在 port " + server.port() + " 等待連線");
+    }
+
+    /** Render 這類主機用環境變數 PORT 指定要聽哪個 port。 */
+    private static int portFromEnvironment() {
+        String port = System.getenv("PORT");
+        return port == null || port.isBlank() ? DEFAULT_PORT : Integer.parseInt(port.strip());
     }
 
     /** port 給 0 時由系統挑一個沒人用的。 */

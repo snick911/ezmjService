@@ -8,12 +8,20 @@
 java -jar ezmj-server-<版號>.jar [port]
 ```
 
-預設 port 是 7788。`--version` 顯示版號。
+沒有指定 port 時看環境變數 `PORT`，再沒有就用 7788。`--version` 顯示版號。
 
 目前的限制：
 
-- 連線沒有加密，也沒有帳號，玩家的身分只靠服務器發的 token。對外開放前要自己加一層 TLS。
+- 服務器本身不加密，也沒有帳號，玩家的身分只靠服務器發的 token。對外開放要放在有 TLS 的主機後面，例如 Render。
 - 牌局只存在記憶體裡，重開服務器牌局就沒了。
+
+## 部署到 Render
+
+用 `Dockerfile` 建置，服務類型是 Web Service，連接 GitHub 後每次 push 到 `main` 都會自動部署。建置時會跑全部測試，失敗的話舊版本繼續運作。
+
+- 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
+- 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
+- Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://<網址>/ws`，TCP 只能用在自己架的服務器。
 
 ## 建置與打包
 
@@ -64,7 +72,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | 類別 | 職責 |
 |---|---|
 | `EzmjServer` | 程式進入點、接受連線、登入與重連、開房間與加入 |
-| `Connection` | 一條連線，一行一則訊息。讀寫各一條執行緒，慢的客戶端不會卡住牌桌 |
+| `Connection` | 一條連線，TCP 或 WebSocket 都是一則訊息一則 JSON。讀寫各一條執行緒，慢的客戶端不會卡住牌桌 |
+| `WebSocket` | 同一個 port 上的 HTTP：健康檢查、升級成 WebSocket、讀寫訊框 |
 | `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上 |
 | `Views` | 把局面轉成送給某個座位的訊息，防作弊的關卡 |
 | `RoomOptions` | 房間設定與檢查 |
@@ -72,7 +81,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 ## 連線協定
 
-TCP 連線，一行一則 UTF-8 JSON，以 `\n` 結尾。一行最多 64 KB，超過就斷線。60 秒沒有收到任何訊息也會斷線，閒置時客戶端要定期送 `ping`。
+同一個 port 接受兩種連線，訊息內容完全一樣：
+
+- TCP：一行一則 UTF-8 JSON，以 `\n` 結尾。
+- WebSocket：連到 `/ws`，一則文字訊息是一則 JSON，不用 `\n`。二進位訊息會斷線。
+
+一則訊息最多 64 KB，超過就斷線。60 秒沒有收到任何訊息也會斷線，閒置時客戶端要定期送 `ping`，WebSocket 層的 ping 也算。
+
+`GET /healthz` 回 200，給主機做健康檢查。
 
 牌的記法：`1w`＝一萬、`1p`＝一筒、`1s`＝一條、`1z`-`4z`＝東南西北、`5z`-`7z`＝中發白、`1f`-`8f`＝春夏秋冬梅蘭竹菊。
 

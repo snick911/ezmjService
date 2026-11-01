@@ -10,6 +10,7 @@ public final class AllTests {
         JsonTest.run();
         ViewsTest.run();
         ServerTest.run();
+        WebSocketTest.run();
         System.exit(T.report() == 0 ? 0 : 1);
     }
 }

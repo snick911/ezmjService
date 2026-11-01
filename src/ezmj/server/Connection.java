@@ -12,8 +12,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /**
- * 一條客戶端連線，一行一則 UTF-8 JSON。讀與寫各一條執行緒：
- * 牌桌只把訊息放進佇列，對方網路再慢也不會卡住其他人；佇列滿了就斷線。
+ * 一條客戶端連線，一則 UTF-8 JSON 是 TCP 上的一行，或 WebSocket 的一則文字訊息，看第一則訊息決定。
+ * 讀與寫各一條執行緒：牌桌只把訊息放進佇列，對方網路再慢也不會卡住其他人；佇列滿了就斷線。
  */
 final class Connection {
 
@@ -39,6 +39,8 @@ final class Connection {
     private final Thread reader;
     private final Thread writer;
     private volatile Member member;
+    /** 讀取執行緒在處理第一則訊息之前決定，之後才會有東西要送。 */
+    private volatile boolean webSocket;
 
     Connection(Socket socket, Handler handler) {
         this.socket = socket;
@@ -65,16 +67,23 @@ final class Connection {
     }
 
     void send(Map<String, Object> message) {
-        byte[] line = (Json.write(message) + "\n").getBytes(StandardCharsets.UTF_8);
-        if (!outgoing.offer(line)) {
-            close();
-        }
+        String json = Json.write(message);
+        enqueue(webSocket
+                ? WebSocket.frame(WebSocket.TEXT, json.getBytes(StandardCharsets.UTF_8))
+                : (json + "\n").getBytes(StandardCharsets.UTF_8));
     }
 
     /** 送出這則訊息後關閉。 */
     void sendAndClose(Map<String, Object> message) {
         send(message);
-        if (!outgoing.offer(END)) {
+        if (webSocket) {
+            enqueue(WebSocket.frame(WebSocket.CLOSE, new byte[0]));
+        }
+        enqueue(END);
+    }
+
+    private void enqueue(byte[] bytes) {
+        if (!outgoing.offer(bytes)) {
             close();
         }
     }
@@ -90,23 +99,69 @@ final class Connection {
 
     private void readLoop() {
         try (InputStream in = new BufferedInputStream(socket.getInputStream())) {
-            ByteArrayOutputStream line = new ByteArrayOutputStream();
-            int b;
-            while ((b = in.read()) >= 0) {
-                if (b == '\n') {
-                    dispatch(line.toString(StandardCharsets.UTF_8));
-                    line.reset();
-                } else if (line.size() >= MAX_LINE_BYTES) {
-                    break;
-                } else {
-                    line.write(b);
-                }
+            if (!WebSocket.startsHttp(in)) {
+                readLines(in);
+            } else if (answerHttp(in)) {
+                webSocket = true;
+                readFrames(in);
             }
         } catch (IOException e) {
-            // 對方斷線或太久沒有訊息，都當作斷線
+            // 對方斷線、太久沒有訊息或不合規定的訊框，都當作斷線
         } finally {
             close();
             handler.closed(this);
+        }
+    }
+
+    private void readLines(InputStream in) throws IOException {
+        ByteArrayOutputStream line = new ByteArrayOutputStream();
+        int b;
+        while ((b = in.read()) >= 0) {
+            if (b == '\n') {
+                dispatch(line.toString(StandardCharsets.UTF_8));
+                line.reset();
+            } else if (line.size() >= MAX_LINE_BYTES) {
+                return;
+            } else {
+                line.write(b);
+            }
+        }
+    }
+
+    /** 這時還沒有任何訊息要送，寫入執行緒閒著，可以直接寫。回傳這條連線是不是改走 WebSocket。 */
+    private boolean answerHttp(InputStream in) throws IOException {
+        WebSocket.Answer answer = WebSocket.answer(in);
+        OutputStream out = socket.getOutputStream();
+        out.write(answer.response());
+        out.flush();
+        return answer.upgraded();
+    }
+
+    private void readFrames(InputStream in) throws IOException {
+        ByteArrayOutputStream text = new ByteArrayOutputStream();
+        boolean fragmented = false;
+        while (true) {
+            WebSocket.Frame frame = WebSocket.readFrame(in, MAX_LINE_BYTES);
+            int opcode = frame.opcode();
+            if (opcode == WebSocket.PING) {
+                enqueue(WebSocket.frame(WebSocket.PONG, frame.payload()));
+            } else if (opcode == WebSocket.CLOSE) {
+                // 回完就由寫入執行緒關閉，這裡繼續讀到連線關閉為止
+                enqueue(WebSocket.frame(WebSocket.CLOSE, frame.payload()));
+                enqueue(END);
+            } else if (opcode == (fragmented ? WebSocket.CONTINUATION : WebSocket.TEXT)) {
+                text.writeBytes(frame.payload());
+                if (text.size() > MAX_LINE_BYTES) {
+                    return;
+                }
+                fragmented = !frame.last();
+                if (frame.last()) {
+                    dispatch(text.toString(StandardCharsets.UTF_8));
+                    text.reset();
+                }
+            } else if (opcode != WebSocket.PONG) {
+                return;
+            }
         }
     }
 
