@@ -21,7 +21,7 @@ java -jar ezmj-server-<版號>.jar [port]
 
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
-- Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://<網址>/ws`，TCP 只能用在自己架的服務器。
+- Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 
 ## 建置與打包
 
