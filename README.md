@@ -89,6 +89,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 ## 連線協定
 
+協定改了要連網頁版 [`ezmj_web`](https://github.com/snick911/ezmj_web) 一起看。網頁的 `PROTOCOL` 來自 `ezmj` 的 `OnlineClient.PROTOCOL`，重新編譯就跟上，但新訊息的處理要另外改。
+
 同一個 port 接受兩種連線，訊息內容完全一樣：
 
 - TCP：一行一則 UTF-8 JSON，以 `\n` 結尾。
