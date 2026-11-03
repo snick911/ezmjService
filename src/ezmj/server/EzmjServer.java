@@ -6,10 +6,14 @@ import java.net.Socket;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 台灣十六張麻將的多人連線服務器。牌局規則全部由服務器上的引擎決定，客戶端只送決定、只收看得到的局面。
@@ -22,6 +26,7 @@ public final class EzmjServer implements Connection.Handler {
     private static final int HONOR_RETRY_MS = 60_000;
     private static final int MAX_CONNECTIONS = 2_000;
     private static final int MAX_ROOMS = 500;
+    private static final int MAX_LISTED_ROOMS = 50;
     private static final int MAX_NAME_LENGTH = 16;
     private static final int TOKEN_BYTES = 24;
     private static final int ROOM_CODE_LENGTH = 6;
@@ -35,6 +40,7 @@ public final class EzmjServer implements Connection.Handler {
     private final Set<Connection> connections = ConcurrentHashMap.newKeySet();
     private final Map<String, Member> members = new ConcurrentHashMap<>();
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
+    private final AtomicLong roomsOpened = new AtomicLong();
     private ServerSocket serverSocket;
 
     public static void main(String[] args) throws IOException {
@@ -154,6 +160,8 @@ public final class EzmjServer implements Connection.Handler {
             connection.send(Protocol.object("type", "pong"));
         } else if (type.equals("honorRoll")) {
             connection.send(honorBoard.toMessage());
+        } else if (type.equals("listRooms")) {
+            connection.send(roomList());
         } else if (type.equals("hello")) {
             hello(connection, message);
         } else {
@@ -248,12 +256,12 @@ public final class EzmjServer implements Connection.Handler {
 
     private void createRoom(Member member, Map<String, Object> message) {
         requireNoRoom(member);
-        RoomOptions options = RoomOptions.from(message);
+        RoomOptions options = RoomOptions.from(message, member.name);
         if (rooms.size() >= MAX_ROOMS) {
             throw new Rejected("serverFull", "服務器的房間已滿");
         }
         String code = newRoomCode();
-        Room room = new Room(this, code, options, timing);
+        Room room = new Room(this, code, roomsOpened.incrementAndGet(), options, timing);
         rooms.put(code, room);
         room.join(member);
         log("開房間 " + code + "，目前 " + rooms.size() + " 間");
@@ -266,6 +274,23 @@ public final class EzmjServer implements Connection.Handler {
             throw new Rejected("noSuchRoom", "找不到這個房間");
         }
         room.join(member);
+    }
+
+    /** 大廳上還能加入的房間，新開的在前面。 */
+    private Map<String, Object> roomList() {
+        List<Room.Listing> listings = new ArrayList<>();
+        for (Room room : rooms.values()) {
+            Room.Listing listing = room.listing();
+            if (listing != null) {
+                listings.add(listing);
+            }
+        }
+        listings.sort(Comparator.comparingLong(Room.Listing::opened).reversed());
+        List<Object> entries = new ArrayList<>();
+        for (Room.Listing listing : listings.subList(0, Math.min(listings.size(), MAX_LISTED_ROOMS))) {
+            entries.add(listing.entry());
+        }
+        return Protocol.object("type", "rooms", "rooms", entries);
     }
 
     private static void requireNoRoom(Member member) {

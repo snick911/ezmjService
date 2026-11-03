@@ -154,6 +154,100 @@ final class ServerTest {
             }
         });
 
+        T.section("大廳");
+        test("不登入也能看房間列表，列出名稱、房主、人數與設定", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙");
+                 TestClient visitor = new TestClient(port)) {
+                String code = createRoom(host, "name", "週末牌局", "chips", 5000);
+                guest.send("type", "joinRoom", "code", code);
+                guest.next("room");
+                Map<String, Object> entry = listed(visitor, code);
+                T.check(entry != null, "列表上有這間");
+                T.eq("週末牌局", entry.get("name"), "名稱");
+                T.eq("甲", entry.get("host"), "房主");
+                T.eq(2L, entry.get("humans"), "真人數");
+                Map<?, ?> options = (Map<?, ?>) entry.get("options");
+                T.eq(5000L, options.get("chips"), "設定");
+                T.eq("週末牌局", options.get("name"), "設定裡的名稱");
+                T.eq(false, options.get("private"), "公開");
+            }
+        });
+        test("沒給房間名稱就用房主的名字", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                host.send("type", "createRoom");
+                Map<?, ?> options = (Map<?, ?>) host.next("room").get("options");
+                T.eq("甲的房間", options.get("name"), "預設名稱");
+                T.eq(false, options.get("private"), "預設公開");
+                T.eq("甲的房間", listRooms(host).get(0).get("name"), "列表上的名稱");
+            }
+        });
+        test("房間名稱超過 30 個字要拒絕", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                host.send("type", "createRoom", "name", "一".repeat(31));
+                Map<String, Object> error = host.next("error");
+                T.eq("badRoomName", error.get("code"), "錯誤代碼");
+                T.eq("房間名稱最多 30 個字", error.get("message"), "可以直接顯示的訊息");
+                // 沒有開成，可以改了再開
+                String code = createRoom(host, "name", "一".repeat(30));
+                T.check(listed(host, code) != null, "30 個字可以");
+            }
+        });
+        test("私人房不列出，但能用房號加入", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
+                String code = createRoom(host, "name", "自己人", "private", true);
+                T.check(listed(guest, code) == null, "列表上沒有");
+                guest.send("type", "joinRoom", "code", code);
+                Map<String, Object> room = guest.next("room");
+                T.eq(1L, room.get("yourSeat"), "加入了");
+                T.eq(true, ((Map<?, ?>) room.get("options")).get("private"), "設定裡是私人房");
+                T.check(listed(guest, code) == null, "有人加入後也沒有");
+            }
+        });
+        test("開打、坐滿與關掉的房間不列出，坐滿的有人離開就再列出來", port -> {
+            List<TestClient> full = seatedClients(port, 4);
+            List<TestClient> playing = seatedClients(port, 1);
+            List<TestClient> open = seatedClients(port, 3);
+            try (TestClient visitor = new TestClient(port); TestClient leaver = TestClient.login(port, "丙")) {
+                String fullCode = roomCode(full.get(0));
+                String openCode = roomCode(open.get(0));
+                createRoom(leaver);
+                leaver.send("type", "leave");
+                leaver.next("left");
+                playing.get(0).send("type", "start");
+                until(playing.get(0), "room", m -> "playing".equals(m.get("state")));
+                T.eq(List.of(openCode), listedCodes(visitor), "只剩還能加入的");
+
+                full.get(3).send("type", "leave");
+                full.get(3).next("left");
+                T.eq(List.of(openCode, fullCode), listedCodes(visitor), "空出位子就再列出來");
+                T.eq(3L, listed(visitor, fullCode).get("humans"), "剩三位");
+            } finally {
+                closeAll(full);
+                closeAll(playing);
+                closeAll(open);
+            }
+        });
+        test("新開的房間在前面，最多列 50 間", port -> {
+            List<TestClient> hosts = new ArrayList<>();
+            try {
+                List<String> codes = new ArrayList<>();
+                for (int i = 0; i < 51; i++) {
+                    TestClient host = TestClient.login(port, "房主" + i);
+                    hosts.add(host);
+                    codes.add(createRoom(host));
+                }
+                try (TestClient visitor = new TestClient(port)) {
+                    List<Object> listed = listedCodes(visitor);
+                    T.eq(50, listed.size(), "最多 50 間");
+                    T.eq(codes.get(50), listed.get(0), "最新的在最前面");
+                    T.eq(codes.get(1), listed.get(49), "最後一間");
+                    T.check(!listed.contains(codes.get(0)), "最舊的被擠掉");
+                }
+            } finally {
+                closeAll(hosts);
+            }
+        });
+
         T.section("牌局");
         test("四位真人打完一整場，籌碼總和不變，也看不到別人的牌", port -> {
             List<TestClient> clients = seatedClients(port, 4, "chips", 100);
@@ -399,6 +493,34 @@ final class ServerTest {
                 guest.close();
             }
         });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> listRooms(TestClient client) throws IOException {
+        client.send("type", "listRooms");
+        return (List<Map<String, Object>>) client.next("rooms").get("rooms");
+    }
+
+    private static List<Object> listedCodes(TestClient client) throws IOException {
+        List<Object> codes = new ArrayList<>();
+        for (Map<String, Object> entry : listRooms(client)) {
+            codes.add(entry.get("code"));
+        }
+        return codes;
+    }
+
+    /** 列表上的這間房間，沒有列出時是 null。 */
+    private static Map<String, Object> listed(TestClient client, String code) throws IOException {
+        for (Map<String, Object> entry : listRooms(client)) {
+            if (code.equals(entry.get("code"))) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    private static String roomCode(TestClient client) {
+        return (String) lastOfType(client, "room").get("code");
     }
 
     private static Map<String, Object> honorRoll(int port) throws IOException {

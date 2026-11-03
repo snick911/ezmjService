@@ -77,10 +77,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 | 類別 | 職責 |
 |---|---|
-| `EzmjServer` | 程式進入點、接受連線、登入與重連、開房間與加入 |
+| `EzmjServer` | 程式進入點、接受連線、登入與重連、開房間與加入、大廳的房間列表 |
 | `Connection` | 一條連線，TCP 或 WebSocket 都是一則訊息一則 JSON。讀寫各一條執行緒，慢的客戶端不會卡住牌桌 |
 | `WebSocket` | 同一個 port 上的 HTTP：健康檢查、升級成 WebSocket、讀寫訊框 |
-| `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上 |
+| `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上，大廳列表只讀它在那裡做好的摘要 `Room.Listing` |
 | `Views` | 把局面轉成送給某個座位的訊息，防作弊的關卡 |
 | `RoomOptions` | 房間設定與檢查 |
 | `HonorBoard` | 榮譽榜：記下打完的成績、在背景同步、組成訊息。排序與內容格式用引擎的 `ezmj.model.HonorRoll` |
@@ -110,9 +110,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|---|
 | `ping` | | 回 `pong`，不用登入 |
 | `honorRoll` | | 回 `honorRoll`，不用登入 |
+| `listRooms` | | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`（1 到 16 字），斷線重連帶 `token` |
 | `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
-| `joinRoom` | `code` | 用房號加入，開打之後不能加入 |
+| `joinRoom` | `code` | 用房號加入，私人房也一樣。開打之後不能加入 |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
@@ -134,6 +135,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `botLevels` | 三家 `NORMAL` | 三個 `BEGINNER`、`NORMAL`、`AMATEUR`、`PRO`，依序是座位 1、2、3 |
 | `waitSeconds` | 30 | 5 到 300。多人桌不能不限時 |
 | `speed` | `NORMAL` | `SLOW`、`NORMAL`、`FAST`，電腦出牌與等宣告的停頓 |
+| `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badRoomName`。只有空白等於沒給 |
+| `private` | `false` | `true` 是私人房：不列在大廳，只能用房號加入 |
 
 決定要帶上詢問裡的 `waitId`。編號已經過期的決定會被忽略，例如倒數到了才送到的。
 
@@ -145,7 +148,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記打到結束的真人，中途離開或斷線由電腦接手過的座位不列入 |
 | `welcome` | `protocol`、`version`、`token`、`name`、`room` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人 |
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
-| `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
+| `rooms` | `rooms` | 回 `listRooms`。只列還在等人（`lobby`）、不是私人房、真人不到四位的房間，新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字）、`humans`（目前坐著的真人數）、`options`（和 `room` 的 `options` 一樣） |
+| `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`options` 是房間設定，`name` 已經補上預設，一定有值。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
 | `left` | | 已經離開房間 |
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
 | `roundStart` | `number`、`dealer`、`roundWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌 |

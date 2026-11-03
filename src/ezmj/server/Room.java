@@ -4,6 +4,7 @@ import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -54,8 +55,13 @@ final class Room implements TableFlow.Listener {
     private record Ask(int waitId, Map<String, Object> message, List<Claim> claims) {
     }
 
+    /** 大廳列表上的一間房間。opened 越大越晚開；entry 做好之後就不再改，可以給任何執行緒讀。 */
+    record Listing(long opened, Map<String, Object> entry) {
+    }
+
     private final EzmjServer server;
     private final String code;
+    private final long opened;
     private final RoomOptions options;
     private final Timing timing;
     private final ScheduledExecutorService executor;
@@ -75,10 +81,14 @@ final class Room implements TableFlow.Listener {
     private Map<String, Object> lastRoundEnd;
     private Runnable cancelNextRound = () -> { };
     private Runnable cancelAbandon = () -> { };
+    /** 上面的欄位只能在房間的執行緒上讀，大廳列表從連線的執行緒來，只讀這份。不列出時是 null。 */
+    private volatile Listing listing;
 
-    Room(EzmjServer server, String code, RoomOptions options, Timing timing) {
+    /** opened 是開房間的順序，大廳列表用來把新開的排前面。 */
+    Room(EzmjServer server, String code, long opened, RoomOptions options, Timing timing) {
         this.server = server;
         this.code = code;
+        this.opened = opened;
         this.options = options;
         this.timing = timing;
         this.executor = Executors.newSingleThreadScheduledExecutor(task -> {
@@ -90,6 +100,11 @@ final class Room implements TableFlow.Listener {
 
     String code() {
         return code;
+    }
+
+    /** 可以從任何執行緒呼叫。開打、坐滿、私人房或已經關了的都是 null。 */
+    Listing listing() {
+        return listing;
     }
 
     /** 等到坐下才回來，房間滿了或已經關了就丟出 Rejected。 */
@@ -430,6 +445,7 @@ final class Room implements TableFlow.Listener {
             return;
         }
         state = State.CLOSED;
+        listing = null;
         if (flow != null) {
             flow.stop();
         }
@@ -526,12 +542,28 @@ final class Room implements TableFlow.Listener {
         }
     }
 
+    /** 有人進出、開打或打完都會走到這裡，所以大廳列表也在這裡更新，而且先於通知，收到 room 時列表已經跟上。 */
     private void broadcastRoom() {
+        updateListing();
         for (Member member : seats) {
             if (member != null) {
                 member.send(roomMessage(member));
             }
         }
+    }
+
+    private void updateListing() {
+        int humans = humanCount();
+        if (state != State.LOBBY || options.privateRoom() || humans == 0 || humans == SEATS) {
+            listing = null;
+            return;
+        }
+        listing = new Listing(opened, Collections.unmodifiableMap(Protocol.object(
+                "code", code,
+                "name", options.name(),
+                "host", seats[0].name,
+                "humans", humans,
+                "options", Collections.unmodifiableMap(options.toMessage()))));
     }
 
     private Map<String, Object> roomMessage(Member viewer) {

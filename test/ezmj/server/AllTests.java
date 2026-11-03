@@ -9,6 +9,7 @@ public final class AllTests {
     public static void main(String[] args) {
         JsonTest.run();
         ViewsTest.run();
+        RoomOptionsTest.run();
         HonorBoardTest.run();
         ServerTest.run();
         WebSocketTest.run();
