@@ -103,6 +103,10 @@ final class ServerTest {
                 T.eq("badOptions", host.next("error").get("code"), "要三家");
                 host.send("type", "createRoom", "speed", "超快");
                 T.eq("badOptions", host.next("error").get("code"), "不認得");
+                host.send("type", "createRoom", "chips", 1000, "basePay", 1001);
+                Map<String, Object> error = host.next("error");
+                T.eq("badOptions", error.get("code"), "底大於籌碼");
+                T.eq("底和每台不能大於籌碼本金", error.get("message"), "可以直接顯示的訊息");
             }
         });
         test("找不到房間與房間已滿", port -> {
@@ -263,6 +267,17 @@ final class ServerTest {
                     // 打完回到等人的狀態，可以再開一場
                     until(client, "room", m -> "lobby".equals(m.get("state")));
                 }
+            } finally {
+                closeAll(clients);
+            }
+        });
+        test("最大的籌碼、底與每台也打得完，金額沒有溢位", port -> {
+            List<TestClient> clients = seatedClients(port, 4, "chips", 10_000_000, "basePay", 1_000_000, "taiPay", 1_000_000);
+            try {
+                clients.get(0).send("type", "start");
+                Map<String, Object> gameOver = playAll(clients).get(0);
+                checkStandings(gameOver, 40_000_000);
+                checkHonorsMatch("winnings", honorRoll(port), gameOver);
             } finally {
                 closeAll(clients);
             }

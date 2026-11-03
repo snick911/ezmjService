@@ -130,13 +130,15 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | 欄位 | 預設 | 範圍 |
 |---|---|---|
 | `chips` | 20000 | 1 到 10000000 |
-| `basePay` | 100 | 1 到 100000 |
-| `taiPay` | 20 | 1 到 100000 |
+| `basePay` | 100 | 1 到 1000000，不能大於 `chips` |
+| `taiPay` | 20 | 1 到 1000000，不能大於 `chips` |
 | `botLevels` | 三家 `NORMAL` | 三個 `BEGINNER`、`NORMAL`、`AMATEUR`、`PRO`，依序是座位 1、2、3 |
 | `waitSeconds` | 30 | 5 到 300。多人桌不能不限時 |
 | `speed` | `NORMAL` | `SLOW`、`NORMAL`、`FAST`，電腦出牌與等宣告的停頓 |
 | `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badRoomName`。只有空白等於沒給 |
 | `private` | `false` | `true` 是私人房：不列在大廳，只能用房號加入 |
+
+金額超出範圍、底或每台大於籌碼本金（等於可以），或其他設定不合理時回錯誤 `badOptions`，`message` 可以直接顯示。
 
 決定要帶上詢問裡的 `waitId`。編號已經過期的決定會被忽略，例如倒數到了才送到的。
 

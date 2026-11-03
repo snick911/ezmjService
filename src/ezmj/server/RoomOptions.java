@@ -16,7 +16,7 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
         String name, boolean privateRoom) {
 
     private static final int MAX_CHIPS = 10_000_000;
-    private static final int MAX_PAY = 100_000;
+    private static final int MAX_PAY = 1_000_000;
     private static final int MIN_WAIT_SECONDS = 5;
     private static final int MAX_WAIT_SECONDS = 300;
     private static final int MAX_NAME_LENGTH = 30;
@@ -26,6 +26,9 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
         int chips = inRange(message, "chips", 20_000, 1, MAX_CHIPS);
         int basePay = inRange(message, "basePay", 100, 1, MAX_PAY);
         int taiPay = inRange(message, "taiPay", 20, 1, MAX_PAY);
+        if (basePay > chips || taiPay > chips) {
+            throw new Rejected("badOptions", "底和每台不能大於籌碼本金");
+        }
         int waitSeconds = inRange(message, "waitSeconds", 30, MIN_WAIT_SECONDS, MAX_WAIT_SECONDS);
         boolean privateRoom = message.get("private") != null && Protocol.bool(message, "private");
         return new RoomOptions(chips, basePay, taiPay, botLevels(message), waitSeconds, speed(message),
