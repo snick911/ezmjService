@@ -1,7 +1,7 @@
 # Render builds this on every push to main. Tests run during the build, so a
 # failing test leaves the previous version running. See "部署到 Render" in README.md.
 FROM eclipse-temurin:17-jdk AS build
-ARG EZMJ_COMMIT=9c85e74d81c8b4de55ee8d0481e234ed6b021147
+ARG EZMJ_COMMIT=b3c09ec096a680c1b2075f13cfdce3cc53c217c2
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 RUN git clone https://github.com/snick911/ezmj.git /ezmj && git -C /ezmj checkout "$EZMJ_COMMIT"
 WORKDIR /app
