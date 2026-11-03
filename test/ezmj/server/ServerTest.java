@@ -282,6 +282,17 @@ final class ServerTest {
                 closeAll(clients);
             }
         });
+        test("roundStart 與 state 都帶局風：起莊是東局，換莊往下一局，連莊不變", port -> {
+            // 底和每台很小，不會有人破產，一定打到換莊
+            List<TestClient> clients = seatedClients(port, 1, "basePay", 1, "taiPay", 1);
+            try {
+                clients.get(0).send("type", "start");
+                playAll(clients);
+                checkHandWinds(clients.get(0));
+            } finally {
+                closeAll(clients);
+            }
+        });
         test("沒人坐的座位由電腦打", port -> {
             List<TestClient> clients = seatedClients(port, 2, "chips", 100, "botLevels", List.of("PRO", "AMATEUR", "BEGINNER"));
             try {
@@ -774,6 +785,35 @@ final class ServerTest {
             Thread.sleep(5);
         }
         throw new AssertionError("沒有人輪到");
+    }
+
+    /** 局風依起莊算：起莊是東局，往下一家依序加一，連莊不變。state 要和這局的 roundStart 一樣。 */
+    private static void checkHandWinds(TestClient client) {
+        Long firstDealer = null;
+        long previousDealer = -1;
+        Object handWind = null;
+        int dealerChanges = 0;
+        synchronized (client.seen) {
+            for (Map<String, Object> message : client.seen) {
+                if ("roundStart".equals(message.get("type"))) {
+                    long dealer = (Long) message.get("dealer");
+                    if (firstDealer == null) {
+                        firstDealer = dealer;
+                        T.eq(1L, message.get("handWind"), "第一局是東局");
+                    } else if (dealer == previousDealer) {
+                        T.eq(handWind, message.get("handWind"), "連莊不變");
+                    } else {
+                        dealerChanges++;
+                        T.eq(Math.floorMod(dealer - firstDealer, 4) + 1L, message.get("handWind"), "換莊往下一局");
+                    }
+                    previousDealer = dealer;
+                    handWind = message.get("handWind");
+                } else if ("state".equals(message.get("type"))) {
+                    T.eq(handWind, message.get("handWind"), "state 和這局的 roundStart 一樣");
+                }
+            }
+        }
+        T.check(dealerChanges > 0, "要換過莊");
     }
 
     private static Map<String, Object> lastOfType(TestClient client, String type) {

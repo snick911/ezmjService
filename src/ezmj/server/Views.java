@@ -56,6 +56,8 @@ final class Views {
                 "dealer", view.dealer(),
                 "streak", view.streak(),
                 "roundWind", view.roundWind(),
+                // 局風全桌都一樣，TableView 沒有，直接讀 Round
+                "handWind", round.handWind(),
                 "seatWind", view.seatWind(),
                 "liveTiles", view.liveTiles(),
                 "hand", codes(view.hand()),

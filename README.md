@@ -154,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`options` 是房間設定，`name` 已經補上預設，一定有值。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
 | `left` | | 已經離開房間 |
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
-| `roundStart` | `number`、`dealer`、`roundWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌 |
+| `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來 |
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
 | `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1 |
 | `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」 |
@@ -169,7 +169,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|
 | `seat` | 這份局面是哪個座位看到的，也就是你 |
 | `phase`、`current` | `TURN`、`CLAIMS`、`FINISHED`，以及輪到的座位 |
-| `dealer`、`streak`、`roundWind`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、自己的門風、牌牆剩幾張 |
+| `dealer`、`streak`、`roundWind`、`handWind`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、局風（和 `roundStart` 一樣）、自己的門風、牌牆剩幾張 |
 | `hand`、`drawn`、`melds`、`flowers`、`discards`、`chips` | 自己的手牌、剛摸的牌（已經算在 `hand` 裡）、面子、花牌、牌河、籌碼 |
 | `claimTile`、`discarder`、`robbing` | 等宣告的牌、打出的人、是不是搶槓 |
 | `listeningWaits`、`autoPlay` | 自己在聽牌模式等的牌（沒有時是 null）、留給舊版客戶端的欄位，連線中的玩家一定是 false。別家不會知道 |

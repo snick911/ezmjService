@@ -615,6 +615,7 @@ final class Room implements TableFlow.Listener {
                 "number", session.roundsPlayed() + 1,
                 "dealer", round.dealer(),
                 "roundWind", round.roundWind(),
+                "handWind", round.handWind(),
                 "streak", round.streak(),
                 "dealMs", timing.dealMs()));
     }
