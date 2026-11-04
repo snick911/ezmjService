@@ -31,8 +31,8 @@ final class Views {
     }
 
     /**
-     * 這個座位眼中的局面。listeningWaits 與 autoPlay 只有自己知道：
-     * 聽牌模式別家看不到，所以不能廣播。
+     * 這個座位眼中的局面。報聽是公開的，別家的 listening 看得到；
+     * 但聽哪些牌（listeningWaits）與 autoPlay 只有自己知道，所以不能廣播。
      */
     static Map<String, Object> state(Round round, int seat, List<Tile> listeningWaits, boolean autoPlay) {
         TableView view = TableView.of(round, seat);
@@ -45,7 +45,8 @@ final class Views {
                     "concealedKongs", opponent.concealedKongs(),
                     "flowers", codes(opponent.flowers()),
                     "discards", codes(opponent.discards()),
-                    "chips", opponent.chips()));
+                    "chips", opponent.chips(),
+                    "listening", opponent.listening()));
         }
         Tile drawn = round.current() == seat ? round.drawn() : null;
         return Protocol.object(

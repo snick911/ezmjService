@@ -13,6 +13,7 @@ public final class AllTests {
         MemberTest.run();
         HonorBoardTest.run();
         ServerTest.run();
+        ListenTest.run();
         WebSocketTest.run();
         System.exit(T.report() == 0 ? 0 : 1);
     }

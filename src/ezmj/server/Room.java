@@ -178,6 +178,11 @@ final class Room implements TableFlow.Listener {
             broadcastRoom();
             if (state == State.PLAYING) {
                 sendState(member.seat);
+                // 上面已經把代打關掉，還有報聽的機會就補送
+                int listenId = flow.listenOffer(member.seat);
+                if (listenId != 0) {
+                    member.send(canListenMessage(listenId));
+                }
                 if (lastRoundEnd != null) {
                     member.send(lastRoundEnd);
                 }
@@ -210,6 +215,11 @@ final class Room implements TableFlow.Listener {
                 break;
             case "chat":
                 chat(member, message);
+                break;
+            case "declareListen":
+                requirePlaying();
+                // 過期的編號由 TableFlow 忽略，和晚到的決定一樣不算錯
+                flow.declareListening(member.seat, Protocol.integer(message, "listenId"));
                 break;
             case "discard":
             case "listen":
@@ -694,9 +704,16 @@ final class Room implements TableFlow.Listener {
         broadcast(Protocol.object("type", "countdown", "seconds", seconds));
     }
 
-    /** 聽牌只有自己知道，由 refresh 的 state 帶給本人。 */
+    /** 報聽的機會只給本人。報了才公開，由 LISTEN 事件與 state 的 listening 告訴全桌。 */
     @Override
-    public void listening(int seat) {
+    public void canListen(int seat, int listenId) {
+        if (seats[seat] != null) {
+            seats[seat].send(canListenMessage(listenId));
+        }
+    }
+
+    private static Map<String, Object> canListenMessage(int listenId) {
+        return Protocol.object("type", "canListen", "listenId", listenId);
     }
 
     @Override

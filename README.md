@@ -120,7 +120,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
 | `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badChat`。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
-| `listen` | `waitId`、`tile` | 打這張牌並進入聽牌模式，之後自動摸打、自動胡，不再吃碰槓 |
+| `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓 |
+| `listen` | `waitId`、`tile` | 舊的做法：打出這張牌並立刻報聽，之後和 `declareListen` 一樣。留給還沒更新的客戶端，照樣接受 |
 | `selfWin` | `waitId` | 自摸 |
 | `kong` | `waitId`、`tile` | 暗槓或加槓 |
 | `claim` | `waitId`、`option` | 宣告 `askClaim` 的第幾個選項，從 0 起算 |
@@ -143,6 +144,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 決定要帶上詢問裡的 `waitId`。編號已經過期的決定會被忽略，例如倒數到了才送到的。
 
+等宣告時，電腦與報聽的人自動做的宣告在等宣告開始 2 秒後才算數。已經決定的宣告比還沒決定的人能做的都大時直接成立，例如電腦要碰、你只能吃；這時你的 `askClaim` 就過期了，不另外通知，晚到的回答和逾時一樣被忽略，接著的 `state` 會告訴你局面往下走了。
+
 ### 服務器送出
 
 | `type` | 欄位 | 說明 |
@@ -158,11 +161,12 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
 | `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來 |
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
-| `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1 |
+| `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`、`LISTEN`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1，`LISTEN` 是 `seat` 報聽了，沒有 `tile` |
+| `canListen` | `listenId` | 只送給你：你剛打出牌，剩下的手牌已經聽牌，可以用 `declareListen` 報聽。到你下一次摸牌、吃碰槓或這局結束就過期，過期不另外通知。電腦接手中不會送 |
 | `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」 |
 | `askClaim` | `waitId`、`tile`、`from`、`robbing`、`options` | 別人打出或加槓的牌可以宣告。`options` 每項有 `kind`（`WIN`、`KONG`、`PONG`、`CHOW`）、`tile`、`fromHand` |
 | `countdown` | `seconds` | 這次等待還剩幾秒，全桌都會收到 |
-| `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數，`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 5 秒） |
+| `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數（每項有 `name`、`tai`，報聽的人胡牌時有「聽牌」1 台），`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 5 秒） |
 | `gameOver` | `reason`（`roundsComplete`、`bankrupt`）、`rounds`、`drawnGames`、`standings` | 整場結束，接著房間回到 `lobby`，可以再開一場。`standings` 依名次排，每項有 `rank`、`seat`、`name`、`chips`、`winnings`、`wins`、`selfDraws`、`dealIns` |
 
 `state` 的欄位：
@@ -174,14 +178,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `dealer`、`streak`、`roundWind`、`handWind`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、局風（和 `roundStart` 一樣）、自己的門風、牌牆剩幾張 |
 | `hand`、`drawn`、`melds`、`flowers`、`discards`、`chips` | 自己的手牌、剛摸的牌（已經算在 `hand` 裡）、面子、花牌、牌河、籌碼 |
 | `claimTile`、`discarder`、`robbing` | 等宣告的牌、打出的人、是不是搶槓 |
-| `listeningWaits`、`autoPlay` | 自己在聽牌模式等的牌（沒有時是 null）、留給舊版客戶端的欄位，連線中的玩家一定是 false。別家不會知道 |
-| `opponents` | 另外三家，從下家起算。每項有 `seat`、`handCount`、`melds`（不含暗槓）、`concealedKongs`（暗槓組數）、`flowers`、`discards`、`chips` |
+| `listeningWaits`、`autoPlay` | 自己報聽後等的牌（沒有報聽是 null），別家不會知道；留給舊版客戶端的欄位，連線中的玩家一定是 false |
+| `opponents` | 另外三家，從下家起算。每項有 `seat`、`handCount`、`melds`（不含暗槓）、`concealedKongs`（暗槓組數）、`flowers`、`discards`、`chips`、`listening`（報聽了沒，聽哪些牌看不到） |
 
 `melds` 每項有 `kind`（`CHOW`、`PONG`、`OPEN_KONG`、`CONCEALED_KONG`）與 `tiles`。
 
 ### 斷線重連
 
-牌局中斷線，座位由電腦代打，其他人會收到 `connected` 變成 false 的 `room`。用同一個 `token` 送 `hello` 就接回來：依序收到 `welcome`、`room`、`state`，如果這局已經結束還會收到 `roundEnd`，如果正在等你決定還會收到詢問。接回來就換回玩家自己打。
+牌局中斷線，座位由電腦代打，其他人會收到 `connected` 變成 false 的 `room`。用同一個 `token` 送 `hello` 就接回來：依序收到 `welcome`、`room`、`state`，還能報聽的話接著是 `canListen`，如果這局已經結束還會收到 `roundEnd`，如果正在等你決定還會收到詢問。斷線的這段時間由電腦接手，報聽的機會也由它決定。接回來就換回玩家自己打。
 
 同一個 token 有新連線時，舊連線會被關閉。還沒開局時斷線就等於離開房間，token 也跟著失效。全桌都斷線超過 2 分鐘就關房間。
 

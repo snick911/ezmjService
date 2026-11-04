@@ -22,7 +22,7 @@ final class ServerTest {
     private ServerTest() {
     }
 
-    private interface Scenario {
+    interface Scenario {
         void run(int port) throws Exception;
     }
 
@@ -629,7 +629,7 @@ final class ServerTest {
     }
 
     /** 不消耗訊息，只看收到過的，打牌的迴圈之後還是收得到每一則。 */
-    private static void awaitSeen(TestClient client, Predicate<Map<String, Object>> wanted) throws InterruptedException {
+    static void awaitSeen(TestClient client, Predicate<Map<String, Object>> wanted) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
             synchronized (client.seen) {
@@ -674,7 +674,7 @@ final class ServerTest {
     }
 
     /** 每個案例一台新的服務器。 */
-    private static void test(String name, Scenario scenario) {
+    static void test(String name, Scenario scenario) {
         T.test(name, () -> T.inTempFolder(folder -> {
             EzmjServer server = new EzmjServer(0, FAST, HonorStore.file(folder.resolve("honor.properties")));
             server.start();
@@ -686,7 +686,7 @@ final class ServerTest {
         }));
     }
 
-    private static String createRoom(TestClient host, Object... options) throws IOException {
+    static String createRoom(TestClient host, Object... options) throws IOException {
         Object[] pairs = new Object[options.length + 2];
         pairs[0] = "type";
         pairs[1] = "createRoom";
@@ -695,7 +695,7 @@ final class ServerTest {
         return (String) host.next("room").get("code");
     }
 
-    private static List<TestClient> seatedClients(int port, int count, Object... options) throws IOException {
+    static List<TestClient> seatedClients(int port, int count, Object... options) throws IOException {
         List<TestClient> clients = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             clients.add(TestClient.login(port, "玩家" + i));
@@ -708,7 +708,7 @@ final class ServerTest {
         return clients;
     }
 
-    private static void closeAll(List<TestClient> clients) throws IOException {
+    static void closeAll(List<TestClient> clients) throws IOException {
         for (TestClient client : clients) {
             client.close();
         }
@@ -802,7 +802,7 @@ final class ServerTest {
     }
 
     /** 同樣的牌與前後的牌越少越孤立。牌寫成 1w 這樣，字牌沒有前後。 */
-    private static Object loneliestTile(List<?> hand) {
+    static Object loneliestTile(List<?> hand) {
         Object loneliest = null;
         int fewest = Integer.MAX_VALUE;
         for (Object tile : hand) {
@@ -826,7 +826,7 @@ final class ServerTest {
     }
 
     /** 能胡就胡，不然就吃碰槓，手牌才會往胡牌靠近。 */
-    private static void answerClaim(TestClient client, Map<String, Object> ask) throws IOException {
+    static void answerClaim(TestClient client, Map<String, Object> ask) throws IOException {
         List<?> options = (List<?>) ask.get("options");
         for (int i = 0; i < options.size(); i++) {
             if ("WIN".equals(((Map<?, ?>) options.get(i)).get("kind"))) {
