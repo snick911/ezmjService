@@ -252,6 +252,78 @@ final class ServerTest {
             }
         });
 
+        T.section("聊天");
+        test("房間裡的真人互相收到，發話的人自己也收到", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
+                String code = createRoom(host);
+                guest.send("type", "joinRoom", "code", code);
+                guest.next("room");
+                host.send("type", "chat", "text", "  大家好 ");
+                for (TestClient client : List.of(host, guest)) {
+                    Map<String, Object> chat = client.next("chat");
+                    T.eq(0L, chat.get("seat"), "發話的座位");
+                    T.eq("甲", chat.get("name"), "發話的名字");
+                    T.eq("大家好", chat.get("text"), "去掉前後空白");
+                }
+                guest.send("type", "chat", "text", "你好");
+                T.eq(1L, host.next("chat").get("seat"), "房主收到客人的");
+                T.eq("乙", guest.next("chat").get("name"), "客人自己也收到");
+            }
+        });
+        test("不在房間不能聊天", port -> {
+            try (TestClient client = TestClient.login(port, "甲"); TestClient visitor = new TestClient(port)) {
+                client.send("type", "chat", "text", "有人嗎");
+                T.eq("notInRoom", client.next("error").get("code"), "登入了但不在房間");
+                visitor.send("type", "chat", "text", "有人嗎");
+                T.eq("notLoggedIn", visitor.next("error").get("code"), "沒有登入");
+            }
+        });
+        test("聊天訊息不合規定要拒絕", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                createRoom(host);
+                host.send("type", "chat", "text", "一".repeat(101));
+                Map<String, Object> error = host.next("error");
+                T.eq("badChat", error.get("code"), "101 個字");
+                T.eq("聊天訊息要是 1 到 100 個字", error.get("message"), "可以直接顯示的訊息");
+                host.send("type", "chat", "text", "   ");
+                T.eq("badChat", host.next("error").get("code"), "只有空白");
+                host.send("type", "chat", "text", "第一行\n第二行");
+                T.eq("badChat", host.next("error").get("code"), "換行");
+                host.send("type", "chat", "text", 3);
+                T.eq("badMessage", host.next("error").get("code"), "不是字串");
+                // 字數用 code point 算，100 個表情符號可以
+                host.send("type", "chat", "text", "🀄".repeat(100));
+                T.eq("🀄".repeat(100), host.next("chat").get("text"), "100 個字");
+            }
+        });
+        test("連發超過每 10 秒 5 則回 chatTooFast", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                createRoom(host);
+                for (int i = 1; i <= 6; i++) {
+                    host.send("type", "chat", "text", "第 " + i + " 則");
+                }
+                for (int i = 1; i <= 5; i++) {
+                    T.eq("第 " + i + " 則", host.next("chat").get("text"), "前五則照送");
+                }
+                T.eq("chatTooFast", host.next("error").get("code"), "第 6 則");
+            }
+        });
+        test("牌局中也能聊", port -> {
+            List<TestClient> clients = seatedClients(port, 2);
+            try {
+                TestClient host = clients.get(0);
+                TestClient guest = clients.get(1);
+                host.send("type", "start");
+                until(guest, "room", m -> "playing".equals(m.get("state")));
+                guest.send("type", "chat", "text", "快打啦");
+                Map<String, Object> chat = until(host, "chat", m -> true);
+                T.eq(1L, chat.get("seat"), "客人的座位");
+                T.eq("快打啦", chat.get("text"), "內容");
+            } finally {
+                closeAll(clients);
+            }
+        });
+
         T.section("牌局");
         test("四位真人打完一整場，籌碼總和不變，也看不到別人的牌", port -> {
             List<TestClient> clients = seatedClients(port, 4, "chips", 100);

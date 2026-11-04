@@ -10,6 +10,7 @@ public final class AllTests {
         JsonTest.run();
         ViewsTest.run();
         RoomOptionsTest.run();
+        MemberTest.run();
         HonorBoardTest.run();
         ServerTest.run();
         WebSocketTest.run();

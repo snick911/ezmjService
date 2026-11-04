@@ -46,6 +46,7 @@ final class Room implements TableFlow.Listener {
 
     private static final int SEATS = 4;
     private static final int JOIN_TIMEOUT_SECONDS = 10;
+    private static final int MAX_CHAT_LENGTH = 100;
     /** 榮譽榜上的日期。主機多半是 UTC，所以不能用系統時區。 */
     private static final ZoneId RECORD_ZONE = ZoneId.of("Asia/Taipei");
 
@@ -207,6 +208,9 @@ final class Room implements TableFlow.Listener {
             case "ready":
                 markReady(member);
                 break;
+            case "chat":
+                chat(member, message);
+                break;
             case "discard":
             case "listen":
             case "selfWin":
@@ -345,6 +349,22 @@ final class Room implements TableFlow.Listener {
             }
         }
         startNextRound();
+    }
+
+    /** 等人或牌局中都可以聊。只轉給現在連著的真人，不留歷史，斷線期間的不補送。 */
+    private void chat(Member member, Map<String, Object> message) {
+        String text = Protocol.string(message, "text").strip();
+        int length = text.codePointCount(0, text.length());
+        if (length == 0 || length > MAX_CHAT_LENGTH) {
+            throw new Rejected("badChat", "聊天訊息要是 1 到 " + MAX_CHAT_LENGTH + " 個字");
+        }
+        if (text.chars().anyMatch(Character::isISOControl)) {
+            throw new Rejected("badChat", "聊天訊息不能有換行或控制字元");
+        }
+        if (!member.mayChat(System.nanoTime() / 1_000_000)) {
+            throw new Rejected("chatTooFast", "說得太快了，請稍等一下");
+        }
+        broadcast(Protocol.object("type", "chat", "seat", member.seat, "name", member.name, "text", text));
     }
 
     private void startNextRound() {

@@ -118,6 +118,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
+| `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badChat`。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
 | `listen` | `waitId`、`tile` | 打這張牌並進入聽牌模式，之後自動摸打、自動胡，不再吃碰槓 |
 | `selfWin` | `waitId` | 自摸 |
@@ -152,6 +153,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
 | `rooms` | `rooms` | 回 `listRooms`。只列還在等人（`lobby`）、不是私人房、真人不到四位的房間，新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字）、`humans`（目前坐著的真人數）、`options`（和 `room` 的 `options` 一樣） |
 | `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`options` 是房間設定，`name` 已經補上預設，一定有值。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
+| `chat` | `seat`、`name`、`text` | 房間裡有人聊天，送給房間裡連著的每一位真人，發話的人自己也會收到。`seat` 與 `name` 是發話的人。不保留歷史，斷線期間的訊息不補送 |
 | `left` | | 已經離開房間 |
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
 | `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來 |
