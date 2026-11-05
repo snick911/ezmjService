@@ -80,6 +80,8 @@ Write-Host '== Jar =='
 $jarName = "ezmj-server-$version.jar"
 $manifest = 'build\MANIFEST.MF'
 "Implementation-Title: EZMJ Server`r`nImplementation-Version: $version`r`nEzmj-Engine-Version: $engineVersion`r`n" | Set-Content -Encoding Ascii $manifest
+New-Item -ItemType Directory -Force "$classes\META-INF" | Out-Null
+Copy-Item 'LICENSE' "$classes\META-INF\LICENSE"
 Invoke-Tool jar @('--create', '--file', "dist\$jarName", '--manifest', $manifest, '--main-class', 'ezmj.server.EzmjServer', '-C', $classes, '.')
 
 Write-Host '== Done =='

@@ -203,3 +203,18 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 ← {"type":"askTurn","waitId":1,…}
 → {"type":"discard","waitId":1,"tile":"9s"}
 ```
+
+## 授權
+
+Copyright © 2026 snick911
+
+雙重授權，依用途選一種：
+
+- **[AGPL-3.0](LICENSE)**（`AGPL-3.0-only`）：任何人都可以使用、修改、散布，包括商業用途，但修改過的版本要用同樣的授權公開完整原始碼。修改後架成服務給別人連線，也要讓使用者拿得到原始碼。
+- **商業授權**：要用在不公開原始碼的產品或服務，請到 [GitHub Issues](https://github.com/snick911/ezmjService/issues) 開一則標題寫「商業授權」的 issue，另外談條件。
+
+[`ezmj`](https://github.com/snick911/ezmj) 與 [`ezmj_web`](https://github.com/snick911/ezmj_web) 是同樣的授權。服務器的 jar 會把 `ezmj` 的引擎一起編進去，所以兩邊的條款都適用。
+
+打包時 `LICENSE` 會放進 jar 的 `META-INF/LICENSE`。
+
+要送 PR 請先看 [CONTRIBUTING.md](CONTRIBUTING.md)。
