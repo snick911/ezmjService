@@ -276,13 +276,20 @@ public final class EzmjServer implements Connection.Handler {
         room.join(member);
     }
 
-    /** 大廳上還能加入的房間，新開的在前面。 */
+    /**
+     * 大廳上還能加入的房間，新開的在前面。另外帶目前的連線數與牌局進行中的房間數：
+     * 看大廳的人也連著，所以連線數就是開著遊戲的人數，連線剛建立還沒送訊息的也算在內。
+     */
     private Map<String, Object> roomList() {
         List<Room.Listing> listings = new ArrayList<>();
+        int playing = 0;
         for (Room room : rooms.values()) {
             Room.Listing listing = room.listing();
             if (listing != null) {
                 listings.add(listing);
+            }
+            if (room.isPlaying()) {
+                playing++;
             }
         }
         listings.sort(Comparator.comparingLong(Room.Listing::opened).reversed());
@@ -290,7 +297,7 @@ public final class EzmjServer implements Connection.Handler {
         for (Room.Listing listing : listings.subList(0, Math.min(listings.size(), MAX_LISTED_ROOMS))) {
             entries.add(listing.entry());
         }
-        return Protocol.object("type", "rooms", "rooms", entries);
+        return Protocol.object("type", "rooms", "rooms", entries, "online", connections.size(), "playingRooms", playing);
     }
 
     private static void requireNoRoom(Member member) {

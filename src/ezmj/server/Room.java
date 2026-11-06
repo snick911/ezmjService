@@ -84,6 +84,8 @@ final class Room implements TableFlow.Listener {
     private Runnable cancelAbandon = () -> { };
     /** 上面的欄位只能在房間的執行緒上讀，大廳列表從連線的執行緒來，只讀這份。不列出時是 null。 */
     private volatile Listing listing;
+    /** 牌局進行中，大廳列表要數有幾桌在打，和 listing 一樣從連線的執行緒讀。 */
+    private volatile boolean playing;
 
     /** opened 是開房間的順序，大廳列表用來把新開的排前面。 */
     Room(EzmjServer server, String code, long opened, RoomOptions options, Timing timing) {
@@ -106,6 +108,11 @@ final class Room implements TableFlow.Listener {
     /** 可以從任何執行緒呼叫。開打、坐滿、私人房或已經關了的都是 null。 */
     Listing listing() {
         return listing;
+    }
+
+    /** 可以從任何執行緒呼叫。私人房與跟電腦打的一人房間也算。 */
+    boolean isPlaying() {
+        return playing;
     }
 
     /** 等到坐下才回來，房間滿了或已經關了就丟出 Rejected。 */
@@ -476,6 +483,7 @@ final class Room implements TableFlow.Listener {
         }
         state = State.CLOSED;
         listing = null;
+        playing = false;
         if (flow != null) {
             flow.stop();
         }
@@ -583,6 +591,7 @@ final class Room implements TableFlow.Listener {
     }
 
     private void updateListing() {
+        playing = state == State.PLAYING;
         int humans = humanCount();
         if (state != State.LOBBY || options.privateRoom() || humans == 0 || humans == SEATS) {
             listing = null;

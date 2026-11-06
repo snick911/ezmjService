@@ -231,6 +231,27 @@ final class ServerTest {
                 closeAll(open);
             }
         });
+        test("列表帶在線人數與牌局進行中的房間數，私人房也算", port -> {
+            List<TestClient> playing = seatedClients(port, 2);
+            List<TestClient> secret = seatedClients(port, 1, "private", true);
+            List<TestClient> waiting = seatedClients(port, 1);
+            try (TestClient visitor = new TestClient(port)) {
+                visitor.send("type", "listRooms");
+                Map<String, Object> before = visitor.next("rooms");
+                T.eq(5L, before.get("online"), "四位真人加上看大廳的");
+                T.eq(0L, before.get("playingRooms"), "還沒開打");
+                for (List<TestClient> room : List.of(playing, secret)) {
+                    room.get(0).send("type", "start");
+                    until(room.get(0), "room", m -> "playing".equals(m.get("state")));
+                }
+                visitor.send("type", "listRooms");
+                T.eq(2L, visitor.next("rooms").get("playingRooms"), "兩間開打");
+            } finally {
+                closeAll(playing);
+                closeAll(secret);
+                closeAll(waiting);
+            }
+        });
         test("新開的房間在前面，最多列 50 間", port -> {
             List<TestClient> hosts = new ArrayList<>();
             try {
