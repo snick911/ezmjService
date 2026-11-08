@@ -115,6 +115,11 @@ final class Room implements TableFlow.Listener {
         return playing;
     }
 
+    /** 可以從任何執行緒呼叫，設定開房間後就不變。 */
+    boolean isExpert() {
+        return options.expert();
+    }
+
     /** 等到坐下才回來，房間滿了或已經關了就丟出 Rejected。 */
     void join(Member member) {
         Future<?> seating;
@@ -413,6 +418,8 @@ final class Room implements TableFlow.Listener {
                 break;
             }
             case "listen": {
+                // 專家模式沒有打牌前的聽牌，試打哪張會被拒絕也等於提示
+                requireMove(!options.expert(), "專家模式要打出牌之後才能聽牌");
                 Tile tile = Protocol.tile(message, "tile");
                 requireMove(turn && round.readyDiscards(seat).containsKey(tile), "打這張牌不會聽牌");
                 flow.declareListening(seat, id, tile);
@@ -691,9 +698,11 @@ final class Room implements TableFlow.Listener {
     public void checkpoint() {
     }
 
+    /** 專家模式不告訴玩家打哪張會聽牌，readyDiscards 一律是空的。 */
     @Override
     public void askTurn(int seat, int waitId, TurnOptions turnOptions) {
-        send(seat, new Ask(waitId, Views.askTurn(waitId, turnOptions, flow.round().readyDiscards(seat)), List.of()));
+        Map<Tile, List<Tile>> ready = options.expert() ? Map.of() : flow.round().readyDiscards(seat);
+        send(seat, new Ask(waitId, Views.askTurn(waitId, turnOptions, ready), List.of()));
     }
 
     @Override

@@ -148,6 +148,49 @@ final class ServerTest {
                 T.eq("gameInProgress", late.next("error").get("code"), "錯誤代碼");
             }
         });
+        test("專家模式的房間：加入時要說支援專家模式，大廳與房間的設定都看得到", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient old = TestClient.login(port, "乙");
+                 TestClient guest = TestClient.login(port, "丙"); TestClient visitor = new TestClient(port)) {
+                String code = createRoom(host, "expert", true);
+                T.eq(true, ((Map<?, ?>) lastOfType(host, "room").get("options")).get("expert"), "房間的設定");
+                T.eq(true, ((Map<?, ?>) listed(visitor, code).get("options")).get("expert"), "大廳的設定");
+                old.send("type", "joinRoom", "code", code);
+                Map<String, Object> error = old.next("error");
+                T.eq("expertNotSupported", error.get("code"), "舊的客戶端不能加入");
+                T.check(((String) error.get("message")).contains("專家模式"), "說明是專家模式的房間");
+                old.send("type", "joinRoom", "code", code, "supports", "expert");
+                T.eq("badMessage", old.next("error").get("code"), "supports 要是清單");
+                guest.send("type", "joinRoom", "code", code, "supports", List.of("expert"));
+                T.eq(1L, guest.next("room").get("yourSeat"), "說支援就能加入");
+                String plain = createRoom(old);
+                visitor.send("type", "hello", "protocol", Protocol.VERSION, "name", "丁");
+                visitor.next("welcome");
+                visitor.send("type", "joinRoom", "code", plain);
+                T.eq(false, ((Map<?, ?>) visitor.next("room").get("options")).get("expert"), "一般房間不用說");
+            }
+        });
+        test("專家模式的房間：askTurn 不給 readyDiscards，也不接受打牌前的 listen", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                createRoom(host, "expert", true, "basePay", 1, "taiPay", 1);
+                host.send("type", "start");
+                Map<String, Object> ask = untilAskTurn(host);
+                host.send("type", "listen", "waitId", ask.get("waitId"), "tile", firstInHand(host));
+                Map<String, Object> error = host.next("error");
+                T.eq("illegalMove", error.get("code"), "不接受 listen");
+                T.eq("專家模式要打出牌之後才能聽牌", error.get("message"), "可以直接顯示的訊息");
+                List<Map<String, Object>> asks = new ArrayList<>();
+                for (int turn = 0; turn < 30; turn++) {
+                    T.check(((Map<?, ?>) ask.get("readyDiscards")).isEmpty(), "readyDiscards 是空的");
+                    asks.add(ask);
+                    host.send("type", "discard", "waitId", ask.get("waitId"), "tile", firstInHand(host));
+                    ask = untilAskTurnOrEnd(host);
+                    if (ask == null) {
+                        break;
+                    }
+                }
+                T.check(asks.size() >= 2, "輪到自己好幾次");
+            }
+        });
         test("最後一個人走了房間就關", port -> {
             try (TestClient host = TestClient.login(port, "甲"); TestClient late = TestClient.login(port, "乙")) {
                 String code = createRoom(host);
@@ -748,6 +791,26 @@ final class ServerTest {
             }
             client.send("type", "pass", "waitId", ask.get("waitId"));
         }
+    }
+
+    /** 和 untilAskTurn 一樣，但這局先結束了就回傳 null。 */
+    private static Map<String, Object> untilAskTurnOrEnd(TestClient client) throws IOException {
+        while (true) {
+            Map<String, Object> ask = client.until(m -> "askTurn".equals(m.get("type")) || "askClaim".equals(m.get("type"))
+                    || "roundEnd".equals(m.get("type")), "輪到真人或這局結束");
+            if ("roundEnd".equals(ask.get("type"))) {
+                return null;
+            }
+            if ("askTurn".equals(ask.get("type"))) {
+                return ask;
+            }
+            client.send("type", "pass", "waitId", ask.get("waitId"));
+        }
+    }
+
+    /** 最近一份局面裡手上的第一張牌，一定打得出去。 */
+    private static Object firstInHand(TestClient client) {
+        return ((List<?>) lastOfType(client, "state").get("hand")).get(0);
     }
 
     private static void closes(TestClient client) {

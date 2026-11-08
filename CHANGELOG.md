@@ -4,6 +4,17 @@
 
 ## 未發布
 
+## 0.7.0 - 2026-11-09
+
+### 新增
+
+- 專家模式的房間：房間設定多了 `expert`（預設 `false`），`room` 與大廳 `rooms` 的 `options` 都帶著。專家模式的房間 `askTurn` 的 `readyDiscards` 一律是空的、不接受打牌前的 `listen`（回 `illegalMove`），打出牌後聽牌照樣送 `canListen`；其他要藏的資訊由客戶端藏。`joinRoom` 可以帶 `supports`（客戶端會的功能清單），專家模式的房間要有 `"expert"` 才能加入，不然回 `expertNotSupported`，所以現在的 Swing 版加入不了，網頁版 0.11.0 起會帶。協定版本還是 1，舊的客戶端開的都是一般房間，照常能用。
+
+### 測試
+
+- 房間設定：專家模式預設關、讀得到、帶在訊息裡、不是 true 或 false 要拒絕。
+- 專家模式的房間：沒說支援的加入不了、`supports` 不是清單要拒絕、說支援的可以加入、大廳與房間的設定看得到；`askTurn` 不給 `readyDiscards`、`listen` 被拒絕。
+
 ## 0.6.0 - 2026-11-08
 
 ### 新增

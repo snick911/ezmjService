@@ -129,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `listRooms` | | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`（1 到 16 字），斷線重連帶 `token` |
 | `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
-| `joinRoom` | `code` | 用房號加入，私人房也一樣。開打之後不能加入 |
+| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入。`supports` 是客戶端會的功能清單，目前只有 `"expert"`：專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）。`supports` 不是清單回 `badMessage` |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
@@ -137,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badChat`。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
 | `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓 |
-| `listen` | `waitId`、`tile` | 舊的做法：打出這張牌並立刻報聽，之後和 `declareListen` 一樣。留給還沒更新的客戶端，照樣接受 |
+| `listen` | `waitId`、`tile` | 打出這張牌並立刻報聽，之後和 `declareListen` 一樣。網頁版跟電腦打的聽牌按鈕用這個。專家模式的房間不接受，回錯誤 `illegalMove` |
 | `selfWin` | `waitId` | 自摸 |
 | `kong` | `waitId`、`tile` | 暗槓或加槓 |
 | `claim` | `waitId`、`option` | 宣告 `askClaim` 的第幾個選項，從 0 起算 |
@@ -155,6 +155,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `speed` | `NORMAL` | `SLOW`、`NORMAL`、`FAST`，電腦出牌與等宣告的停頓 |
 | `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badRoomName`。只有空白等於沒給 |
 | `private` | `false` | `true` 是私人房：不列在大廳，只能用房號加入 |
+| `expert` | `false` | `true` 是專家模式，房間裡每個人都一樣。服務器只做不給提示的部分：`askTurn` 的 `readyDiscards` 一律是空的、不接受 `listen`，打出牌後聽牌照樣送 `canListen`。其他（聽牌中不列出等的牌、紀錄只留一筆、牌河每家只看最後一張、不顯示剩幾張）由客戶端藏，所以加入要說 `supports`。0.6.0 和更早的服務器不認得，會當作一般房間 |
 
 金額超出範圍、底或每台大於籌碼本金（等於可以），或其他設定不合理時回錯誤 `badOptions`，`message` 可以直接顯示。
 
@@ -179,7 +180,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
 | `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`、`LISTEN`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1，`LISTEN` 是 `seat` 報聽了，沒有 `tile` |
 | `canListen` | `listenId` | 只送給你：你剛打出牌，剩下的手牌已經聽牌，可以用 `declareListen` 報聽。到你下一次摸牌、吃碰槓或這局結束就過期，過期不另外通知。電腦接手中不會送 |
-| `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」 |
+| `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」，專家模式的房間一律是空的 |
 | `askClaim` | `waitId`、`tile`、`from`、`robbing`、`options` | 別人打出或加槓的牌可以宣告。`options` 每項有 `kind`（`WIN`、`KONG`、`PONG`、`CHOW`）、`tile`、`fromHand` |
 | `countdown` | `seconds` | 這次等待還剩幾秒，全桌都會收到 |
 | `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數（每項有 `name`、`tai`，報聽的人胡牌時有「聽牌」1 台），`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 5 秒） |

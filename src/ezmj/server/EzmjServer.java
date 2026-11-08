@@ -279,7 +279,23 @@ public final class EzmjServer implements Connection.Handler {
         if (room == null) {
             throw new Rejected("noSuchRoom", "找不到這個房間");
         }
+        // 不會藏資訊的客戶端坐進專家模式的房間，就比別人看得多
+        if (room.isExpert() && !supports(message, "expert")) {
+            throw new Rejected("expertNotSupported", "這間是專家模式的房間，這個版本的程式還不能加入，請用網頁版");
+        }
         room.join(member);
+    }
+
+    /** joinRoom 的 supports 列出客戶端會的功能，例如 "expert"。舊的客戶端沒有這個欄位。 */
+    private static boolean supports(Map<String, Object> message, String feature) {
+        Object value = message.get("supports");
+        if (value == null) {
+            return false;
+        }
+        if (!(value instanceof List)) {
+            throw new Rejected("badMessage", "欄位 supports 要是清單");
+        }
+        return ((List<?>) value).contains(feature);
     }
 
     /**

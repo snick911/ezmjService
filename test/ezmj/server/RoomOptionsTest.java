@@ -58,6 +58,14 @@ final class RoomOptionsTest {
             T.eq("自己人", message.get("name"), "名稱");
             T.eq(true, message.get("private"), "私人房");
         });
+        T.test("專家模式預設關，給 true 才開，也帶在設定的訊息", () -> {
+            T.eq(false, from(Map.of()).expert(), "預設不是專家模式");
+            T.eq(false, from(Map.of()).toMessage().get("expert"), "訊息裡是 false");
+            RoomOptions expert = from(Map.of("expert", true));
+            T.eq(true, expert.expert(), "專家模式");
+            T.eq(true, expert.toMessage().get("expert"), "訊息裡是 true");
+            T.eq("badMessage", rejection(Map.of("expert", "yes")), "不是 true 或 false");
+        });
     }
 
     private static RoomOptions from(Map<String, Object> message) {

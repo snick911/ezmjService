@@ -11,9 +11,11 @@ import ezmj.model.GameSpeed;
  * 建房間時選定的設定，沒給的欄位用預設值。botLevels 依序是座位 1、2、3，只有沒人坐的座位會用到。
  * 多人桌不能不限時，否則一個人不動全桌都要等，所以 waitSeconds 一定大於 0。
  * 私人房不列在大廳，只能用房號加入。
+ * 專家模式不給打牌前的聽牌提示（askTurn 的 readyDiscards 是空的、不接受 listen），其他看不到的資訊由客戶端藏起來；
+ * 加入時沒說支援專家模式的客戶端進不來，見 EzmjServer.joinRoom。
  */
 record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels, int waitSeconds, GameSpeed speed,
-        String name, boolean privateRoom) {
+        String name, boolean privateRoom, boolean expert) {
 
     private static final int MAX_CHIPS = 10_000_000;
     private static final int MAX_PAY = 1_000_000;
@@ -31,15 +33,17 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
         }
         int waitSeconds = inRange(message, "waitSeconds", 30, MIN_WAIT_SECONDS, MAX_WAIT_SECONDS);
         boolean privateRoom = message.get("private") != null && Protocol.bool(message, "private");
+        boolean expert = message.get("expert") != null && Protocol.bool(message, "expert");
         return new RoomOptions(chips, basePay, taiPay, botLevels(message), waitSeconds, speed(message),
-                name(message, hostName), privateRoom);
+                name(message, hostName), privateRoom, expert);
     }
 
     Map<String, Object> toMessage() {
         List<String> levels = new ArrayList<>();
         botLevels.forEach(level -> levels.add(level.name()));
         return Protocol.object("chips", chips, "basePay", basePay, "taiPay", taiPay, "botLevels", levels,
-                "waitSeconds", waitSeconds, "speed", speed.name(), "name", name, "private", privateRoom);
+                "waitSeconds", waitSeconds, "speed", speed.name(), "name", name, "private", privateRoom,
+                "expert", expert);
     }
 
     /** 字數和玩家名字一樣用 code point 算，表情符號也是一個字。 */
