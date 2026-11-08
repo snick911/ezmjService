@@ -33,6 +33,8 @@ final class HonorBoard {
     private HonorRoll roll = new HonorRoll();
     private boolean loaded;
     private boolean dirty;
+    /** 最近一次同步失敗了，下一次成功才清掉。 */
+    private boolean syncFailing;
 
     /** 先試著讀一次才回來，這樣服務器開始接連線時榜就是好的。 */
     HonorBoard(HonorStore store, int retryMs) {
@@ -71,6 +73,11 @@ final class HonorBoard {
                 "dealIns", entries(HonorRoll.Category.DEAL_INS));
     }
 
+    /** 讀不到存過的紀錄，或新紀錄存不進去，而且之後還沒成功過。這時成績只在記憶體裡，休眠或部署就沒了。 */
+    synchronized boolean syncFailing() {
+        return syncFailing;
+    }
+
     /** 等手上的存檔做完，再把還沒存到的存最後一次。 */
     void close() {
         worker.shutdown();
@@ -87,7 +94,13 @@ final class HonorBoard {
         try {
             loadSaved();
             save();
+            synchronized (this) {
+                syncFailing = false;
+            }
         } catch (IOException | RuntimeException e) {
+            synchronized (this) {
+                syncFailing = true;
+            }
             EzmjServer.log("榮譽榜同步失敗，還會再試 " + (attempts - 1) + " 次：" + e);
             if (attempts > 1 && !worker.isShutdown()) {
                 worker.schedule(() -> sync(attempts - 1), retryMs, TimeUnit.MILLISECONDS);

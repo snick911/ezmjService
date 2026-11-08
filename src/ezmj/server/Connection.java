@@ -31,6 +31,9 @@ final class Connection {
 
         /** 只會呼叫一次。 */
         void closed(Connection connection);
+
+        /** HTTP 要求服務器狀態時，在這條連線的讀取執行緒上呼叫。 */
+        Map<String, Object> status(Connection connection);
     }
 
     private final Socket socket;
@@ -130,7 +133,7 @@ final class Connection {
 
     /** 這時還沒有任何訊息要送，寫入執行緒閒著，可以直接寫。回傳這條連線是不是改走 WebSocket。 */
     private boolean answerHttp(InputStream in) throws IOException {
-        WebSocket.Answer answer = WebSocket.answer(in);
+        WebSocket.Answer answer = WebSocket.answer(in, () -> handler.status(this));
         OutputStream out = socket.getOutputStream();
         out.write(answer.response());
         out.flush();

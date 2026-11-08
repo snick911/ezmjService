@@ -11,15 +11,17 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * 和 TCP 共用同一個 port 的 HTTP 與 WebSocket（RFC 6455）。Render 這類主機只把 HTTP 轉進來，
- * TLS 也在它們那邊處理好了，這裡看到的都是明文。只做服務器用得到的部分：健康檢查，以及升級成 WebSocket。
+ * TLS 也在它們那邊處理好了，這裡看到的都是明文。只做服務器用得到的部分：健康檢查、狀態，以及升級成 WebSocket。
  */
 final class WebSocket {
 
     static final String PATH = "/ws";
     static final String HEALTH_PATH = "/healthz";
+    static final String STATUS_PATH = "/status";
 
     static final int CONTINUATION = 0;
     static final int TEXT = 1;
@@ -70,8 +72,8 @@ final class WebSocket {
         }
     }
 
-    /** 讀一個 HTTP 請求的開頭，決定怎麼回答。 */
-    static Answer answer(InputStream in) throws IOException {
+    /** 讀一個 HTTP 請求的開頭，決定怎麼回答。status 只在要求狀態時才呼叫。 */
+    static Answer answer(InputStream in, Supplier<Map<String, Object>> status) throws IOException {
         String[] lines = readHead(in).split("\r\n");
         String[] request = lines[0].split(" ");
         if (request.length != 3) {
@@ -81,6 +83,9 @@ final class WebSocket {
         String path = request[1].split("\\?", 2)[0];
         if (path.equals(HEALTH_PATH)) {
             return plain("200 OK", headOnly, "");
+        }
+        if (path.equals(STATUS_PATH)) {
+            return json(status.get(), headOnly);
         }
         if (!path.equals(PATH)) {
             return plain("404 Not Found", headOnly, "");
@@ -105,14 +110,30 @@ final class WebSocket {
 
     /** 回應之後就關閉連線，內文只有狀態。 */
     private static Answer plain(String status, boolean headOnly, String extraHeaders) {
-        String body = status + "\n";
-        String response = "HTTP/1.1 " + status + "\r\n"
-                + extraHeaders
-                + "Content-Type: text/plain\r\n"
-                + "Content-Length: " + body.length() + "\r\n"
-                + "Connection: close\r\n\r\n"
-                + (headOnly ? "" : body);
-        return new Answer(response.getBytes(StandardCharsets.ISO_8859_1), false);
+        return respond(status, headOnly, extraHeaders + "Content-Type: text/plain\r\n",
+                (status + "\n").getBytes(StandardCharsets.ISO_8859_1));
+    }
+
+    /** 內容本來就公開，網頁也要能直接讀，所以允許任何來源；每次都是當下的值，不能被快取。 */
+    private static Answer json(Map<String, Object> body, boolean headOnly) {
+        return respond("200 OK", headOnly,
+                "Content-Type: application/json; charset=utf-8\r\n"
+                        + "Cache-Control: no-store\r\n"
+                        + "Access-Control-Allow-Origin: *\r\n",
+                Json.write(body).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Answer respond(String status, boolean headOnly, String headers, byte[] body) {
+        String head = "HTTP/1.1 " + status + "\r\n"
+                + headers
+                + "Content-Length: " + body.length + "\r\n"
+                + "Connection: close\r\n\r\n";
+        ByteArrayOutputStream response = new ByteArrayOutputStream();
+        response.writeBytes(head.getBytes(StandardCharsets.ISO_8859_1));
+        if (!headOnly) {
+            response.writeBytes(body);
+        }
+        return new Answer(response.toByteArray(), false);
     }
 
     private static String readHead(InputStream in) throws IOException {

@@ -6,6 +6,7 @@ import java.net.Socket;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -42,6 +43,9 @@ public final class EzmjServer implements Connection.Handler {
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final AtomicLong roomsOpened = new AtomicLong();
     private ServerSocket serverSocket;
+    /** start 設定好之後才開始接連線，之後只讀。存活時間用 nanoTime 算，系統時間被調整也不受影響。 */
+    private Instant startedAt;
+    private long startedNanos;
 
     public static void main(String[] args) throws IOException {
         if (args.length == 1 && args[0].equals("--version")) {
@@ -102,6 +106,8 @@ public final class EzmjServer implements Connection.Handler {
     /** accept 的執行緒不是 daemon，main 回傳後程式還會繼續跑。 */
     void start() throws IOException {
         serverSocket = new ServerSocket(requestedPort);
+        startedAt = Instant.now();
+        startedNanos = System.nanoTime();
         new Thread(this::acceptLoop, "ezmj-accept").start();
     }
 
@@ -298,6 +304,37 @@ public final class EzmjServer implements Connection.Handler {
             entries.add(listing.entry());
         }
         return Protocol.object("type", "rooms", "rooms", entries, "online", connections.size(), "playingRooms", playing);
+    }
+
+    /**
+     * GET /status 的內容。online 的算法和大廳一樣，只是不算查狀態的這條連線。
+     * ok 表示 problems 是空的；有問題時服務器還是在跑，只是有些事做不到。
+     */
+    @Override
+    public Map<String, Object> status(Connection self) {
+        int online = connections.size() - (connections.contains(self) ? 1 : 0);
+        int playing = 0;
+        for (Room room : rooms.values()) {
+            if (room.isPlaying()) {
+                playing++;
+            }
+        }
+        List<Object> problems = new ArrayList<>();
+        if (rooms.size() >= MAX_ROOMS) {
+            problems.add("roomsFull");
+        }
+        if (honorBoard.syncFailing()) {
+            problems.add("honorRollSync");
+        }
+        return Protocol.object(
+                "ok", problems.isEmpty(),
+                "problems", problems,
+                "version", ServerVersion.get(),
+                "startedAt", startedAt.truncatedTo(ChronoUnit.SECONDS).toString(),
+                "uptimeSeconds", (System.nanoTime() - startedNanos) / 1_000_000_000L,
+                "online", online,
+                "rooms", rooms.size(),
+                "playingRooms", playing);
     }
 
     private static void requireNoRoom(Member member) {

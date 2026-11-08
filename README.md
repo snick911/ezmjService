@@ -23,6 +23,7 @@ java -jar ezmj-server-<版號>.jar [port]
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
+- 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
 - 目前用免費方案，不能掛硬碟，容器的檔案系統在重新部署或服務休眠之後就清空了，所以榮譽榜存在 GitHub Gist：
   1. 到 <https://gist.github.com> 建立一個 secret gist，檔名 `honor-roll.properties`，內容隨便打一行 `# EZMJ`。網址最後一段就是 Gist ID。
   2. 到 GitHub 的 Settings → Developer settings 建立 token，只給 Gists 的讀寫權限。
@@ -79,7 +80,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|
 | `EzmjServer` | 程式進入點、接受連線、登入與重連、開房間與加入、大廳的房間列表 |
 | `Connection` | 一條連線，TCP 或 WebSocket 都是一則訊息一則 JSON。讀寫各一條執行緒，慢的客戶端不會卡住牌桌 |
-| `WebSocket` | 同一個 port 上的 HTTP：健康檢查、升級成 WebSocket、讀寫訊框 |
+| `WebSocket` | 同一個 port 上的 HTTP：健康檢查、狀態、升級成 WebSocket、讀寫訊框 |
 | `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上，大廳列表只讀它在那裡做好的摘要 `Room.Listing` |
 | `Views` | 把局面轉成送給某個座位的訊息，防作弊的關卡 |
 | `RoomOptions` | 房間設定與檢查 |
@@ -99,6 +100,21 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 一則訊息最多 64 KB，超過就斷線。60 秒沒有收到任何訊息也會斷線，閒置時客戶端要定期送 `ping`，WebSocket 層的 ping 也算。
 
 `GET /healthz` 回 200，給主機做健康檢查。
+
+`GET /status` 回服務器狀態的 JSON，給人或監控服務確認連線用，不用登入。網頁也可以直接讀（允許任何來源），每次都是當下的值，不會被快取。不管正不正常都回 200，要看 `ok`。線上的網址是 <https://ezmj-server.onrender.com/status>；服務休眠時第一次查詢要等它醒來，大約一分鐘，一直沒有回應就是服務器沒在跑。
+
+```
+{"ok":true,"problems":[],"version":"0.6.0","startedAt":"2026-11-08T11:30:05Z","uptimeSeconds":125,"online":2,"rooms":1,"playingRooms":1}
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `ok` | `problems` 是空的就是 `true` |
+| `problems` | 有問題的項目，正常時是空陣列。`roomsFull`：房間數到了上限 500 間，開不了新房間。`honorRollSync`：榮譽榜讀不到 Gist 或寫不進去，而且之後還沒成功過，新成績只在記憶體裡，休眠或部署後就沒了 |
+| `version` | 服務器版號 |
+| `startedAt`、`uptimeSeconds` | 開始接連線的時間（UTC，到秒）與到現在幾秒。Render 免費方案休眠後再叫醒就從 0 重新算 |
+| `online` | 目前的連線數，算法和 `rooms` 訊息的 `online` 一樣，只是不算查狀態的這一條 |
+| `rooms`、`playingRooms` | 房間數（私人房與還在等人的也算）與牌局進行中的房間數 |
 
 牌的記法：`1w`＝一萬、`1p`＝一筒、`1s`＝一條、`1z`-`4z`＝東南西北、`5z`-`7z`＝中發白、`1f`-`8f`＝春夏秋冬梅蘭竹菊。
 

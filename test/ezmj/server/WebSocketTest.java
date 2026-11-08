@@ -11,6 +11,8 @@ import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -39,6 +41,56 @@ final class WebSocketTest {
             T.eq(200, get(port, "/healthz").statusCode(), "健康檢查");
             T.eq(404, get(port, "/").statusCode(), "沒有這個路徑");
             T.eq(426, get(port, "/ws").statusCode(), "沒有要求升級");
+        });
+        test("狀態：存活時間、線上人數、是否正常", port -> {
+            HttpResponse<String> response = get(port, "/status");
+            T.eq(200, response.statusCode(), "狀態碼");
+            T.eq("*", response.headers().firstValue("Access-Control-Allow-Origin").orElse(""), "網頁可以讀");
+            T.eq("no-store", response.headers().firstValue("Cache-Control").orElse(""), "不能快取");
+            Map<String, Object> idle = json(response);
+            T.eq(true, idle.get("ok"), "正常");
+            T.eq(List.of(), idle.get("problems"), "沒有問題");
+            T.eq(ServerVersion.get(), idle.get("version"), "版號");
+            T.check((Long) idle.get("uptimeSeconds") >= 0, "存活時間：" + idle.get("uptimeSeconds"));
+            T.check(!Instant.parse((String) idle.get("startedAt")).isAfter(Instant.now()), "啟動時間");
+            T.eq(0L, idle.get("online"), "查狀態的這條連線不算");
+            T.eq(0L, idle.get("rooms"), "房間數");
+            try (Client client = new Client(port)) {
+                client.send("{\"type\":\"hello\",\"protocol\":" + Protocol.VERSION + ",\"name\":\"甲\"}");
+                client.next("welcome");
+                client.send("{\"type\":\"createRoom\"}");
+                client.next("room");
+                Map<String, Object> busy = json(get(port, "/status"));
+                T.eq(1L, busy.get("online"), "連著的玩家");
+                T.eq(1L, busy.get("rooms"), "房間數");
+                T.eq(0L, busy.get("playingRooms"), "還沒開打");
+            }
+            HttpResponse<String> head = send(port, HttpRequest.newBuilder(uri(port, "/status"))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody()).build());
+            T.eq(200, head.statusCode(), "HEAD 的狀態碼");
+            T.eq("", head.body(), "HEAD 沒有內文");
+        });
+        T.test("榮譽榜存不進去時狀態不正常", () -> {
+            HonorStore broken = new HonorStore() {
+                @Override
+                public String read() throws IOException {
+                    throw new IOException("測試用的壞掉的存放處");
+                }
+
+                @Override
+                public void write(String content) throws IOException {
+                    throw new IOException("測試用的壞掉的存放處");
+                }
+            };
+            EzmjServer server = new EzmjServer(0, FAST, broken);
+            server.start();
+            try {
+                Map<String, Object> status = json(get(server.port(), "/status"));
+                T.eq(false, status.get("ok"), "不正常");
+                T.eq(List.of("honorRollSync"), status.get("problems"), "問題");
+            } finally {
+                server.stop();
+            }
         });
         test("登入、中文名字與 ping", port -> {
             try (Client client = new Client(port)) {
@@ -128,9 +180,21 @@ final class WebSocketTest {
     }
 
     private static HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {
+        return send(port, HttpRequest.newBuilder(uri(port, path)).build());
+    }
+
+    private static HttpResponse<String> send(int port, HttpRequest request) throws IOException, InterruptedException {
         HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
-        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static URI uri(int port, String path) {
+        return URI.create("http://127.0.0.1:" + port + path);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> json(HttpResponse<String> response) {
+        return (Map<String, Object>) Json.parse(response.body());
     }
 
     /** 自己完成升級的 Socket，用來送 JDK 客戶端不會送的壞訊框。 */

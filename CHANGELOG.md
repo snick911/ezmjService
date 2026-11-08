@@ -4,6 +4,12 @@
 
 ## 未發布
 
+## 0.6.0 - 2026-11-08
+
+### 新增
+
+- 狀態 API：`GET /status`（也接受 `HEAD`）回 JSON，有 `ok`（是否正常）、`problems`（有問題的項目：`roomsFull` 房間數到上限、`honorRollSync` 榮譽榜存不進 Gist）、`version`、`startedAt` 與 `uptimeSeconds`（存活時間）、`online`（線上人數，不算查狀態的這條連線）、`rooms` 與 `playingRooms`。不用登入，允許任何來源讀取，不快取，不管正不正常都回 200。`/healthz` 不變。協定版本還是 1。
+
 ## 0.5.0 - 2026-11-06
 
 ### 新增
