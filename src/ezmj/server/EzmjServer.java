@@ -3,6 +3,7 @@ package ezmj.server;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -57,11 +58,32 @@ public final class EzmjServer implements Connection.Handler {
             System.exit(2);
         }
         int port = args.length == 1 ? Integer.parseInt(args[0]) : portFromEnvironment();
+        URI keepAwakeUrl = keepAwakeUrlFromEnvironment();
         EzmjServer server = new EzmjServer(port, Timing.NORMAL, honorStoreFromEnvironment());
         // 部署或休眠時主機會要程式結束，剛打完還沒存到的成績要趕上
         Runtime.getRuntime().addShutdownHook(new Thread(server.honorBoard()::close, "ezmj-shutdown"));
         server.start();
         log("EZMJ Server " + ServerVersion.get() + " 在 port " + server.port() + " 等待連線");
+        if (keepAwakeUrl != null) {
+            // 計時器是 daemon 執行緒，跟著程式一起結束，不用另外關
+            new KeepAwake(keepAwakeUrl, KeepAwake.INTERVAL_MS);
+            log("保持清醒：每 " + KeepAwake.INTERVAL_MS / 60_000 + " 分鐘連一次 " + keepAwakeUrl);
+        }
+    }
+
+    /** 沒設定就不做。設錯了直接停止，不然以為有在保持清醒，其實沒有。 */
+    private static URI keepAwakeUrlFromEnvironment() {
+        String text = environment("EZMJ_KEEP_AWAKE_URL");
+        if (text == null) {
+            return null;
+        }
+        try {
+            return KeepAwake.parse(text);
+        } catch (IllegalArgumentException e) {
+            System.err.println("EZMJ_KEEP_AWAKE_URL " + e.getMessage());
+            System.exit(2);
+            return null;
+        }
     }
 
     /** Render 這類主機用環境變數 PORT 指定要聽哪個 port。 */

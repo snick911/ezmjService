@@ -15,6 +15,7 @@ java -jar ezmj-server-<版號>.jar [port]
 - 服務器本身不加密，也沒有帳號，玩家的身分只靠服務器發的 token。對外開放要放在有 TLS 的主機後面，例如 Render。
 - 牌局只存在記憶體裡，重開服務器牌局就沒了。
 - 榮譽榜預設存成檔案，路徑看環境變數 `EZMJ_HONOR_FILE`，沒有指定就是目前資料夾的 `honor-roll.properties`。同時設定 `EZMJ_GIST_ID` 與 `EZMJ_GIST_TOKEN` 就改存 GitHub Gist，只設定一個會直接停止。
+- 設定環境變數 `EZMJ_KEEP_AWAKE_URL` 時，服務器每 10 分鐘連一次這個網址，讓免費主機不要休眠，見「部署到 Render」。網址不是 http 或 https 的完整網址會直接停止。
 
 ## 部署到 Render
 
@@ -24,6 +25,10 @@ java -jar ezmj-server-<版號>.jar [port]
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
+- 免費方案 15 分鐘沒有收到 HTTP 請求或 WebSocket 訊息就休眠，下一個請求要等它醒來，大約一分鐘。實際上偶爾會叫不醒：請求一直卡著、沒有回應，服務也沒有啟動（log 看不到「榮譽榜存在 Gist」），只能在 Render 按 Manual Deploy。所以在 Environment 設定 `EZMJ_KEEP_AWAKE_URL` 為 `https://ezmj-server.onrender.com/status`，服務器每 10 分鐘從外面連一次自己，就不會休眠。要經過 Render 的入口才算流量，所以一定要用公開網址。代價：
+  - 一直醒著每月會用掉 720 到 744 小時，免費方案一個 workspace 每月只有 750 小時。這個 workspace 不要再開別的免費服務，不然時數用完，所有免費服務都會停到下個月初。
+  - Render 不鼓勵用這種方式讓免費服務保持清醒。不想這樣做的話刪掉這個環境變數，服務器就照常休眠。
+  - 請求失敗會記在 log：「保持清醒的請求失敗」，恢復時記一次「恢復正常」，正常時不記。
 - 目前用免費方案，不能掛硬碟，容器的檔案系統在重新部署或服務休眠之後就清空了，所以榮譽榜存在 GitHub Gist：
   1. 到 <https://gist.github.com> 建立一個 secret gist，檔名 `honor-roll.properties`，內容隨便打一行 `# EZMJ`。網址最後一段就是 Gist ID。
   2. 到 GitHub 的 Settings → Developer settings 建立 token，只給 Gists 的讀寫權限。
@@ -86,6 +91,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `RoomOptions` | 房間設定與檢查 |
 | `HonorBoard` | 榮譽榜：記下打完的成績、在背景同步、組成訊息。排序與內容格式用引擎的 `ezmj.model.HonorRoll` |
 | `HonorStore`、`GistStore` | 榮譽榜存在哪裡：檔案或 GitHub Gist |
+| `KeepAwake` | 定期連自己的公開網址，讓免費主機不要休眠 |
 | `Protocol`、`Json` | 組訊息、讀欄位、最小的 JSON |
 
 ## 連線協定

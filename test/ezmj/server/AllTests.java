@@ -15,6 +15,7 @@ public final class AllTests {
         ServerTest.run();
         ListenTest.run();
         WebSocketTest.run();
+        KeepAwakeTest.run();
         System.exit(T.report() == 0 ? 0 : 1);
     }
 }
