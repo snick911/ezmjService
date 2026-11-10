@@ -14,6 +14,7 @@ import ezmj.model.GameSpeed;
  * 私人房不列在大廳，只能用房號加入。
  * 專家模式不給打牌前的聽牌提示（askTurn 的 readyDiscards 是空的、不接受 listen），其他看不到的資訊由客戶端藏起來；
  * 加入時沒說支援專家模式的客戶端進不來，見 EzmjServer.joinRoom。
+ * 專家模式每次最多等 EXPERT_MAX_WAIT_SECONDS 秒，送來比較長的（例如還不知道這條規則的舊客戶端）就改成這個，不拒絕。
  */
 record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels, int waitSeconds, GameSpeed speed,
         String name, boolean privateRoom, boolean expert) {
@@ -22,6 +23,8 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
     private static final int MAX_PAY = 1_000_000;
     private static final int MIN_WAIT_SECONDS = 5;
     private static final int MAX_WAIT_SECONDS = 300;
+    /** 和 ezmj 的 GameConfig.EXPERT_MAX_WAIT_SECONDS、網頁版的 OnlinePanel 一樣。 */
+    static final int EXPERT_MAX_WAIT_SECONDS = 10;
     private static final int MAX_NAME_LENGTH = 30;
 
     /** 沒給房間名稱就用房主的名字。 */
@@ -32,9 +35,13 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
         if (basePay > chips || taiPay > chips) {
             throw new Rejected("badOptions", "底和每台不能大於籌碼本金");
         }
-        int waitSeconds = inRange(message, "waitSeconds", 30, MIN_WAIT_SECONDS, MAX_WAIT_SECONDS);
-        boolean privateRoom = message.get("private") != null && Protocol.bool(message, "private");
         boolean expert = message.get("expert") != null && Protocol.bool(message, "expert");
+        int waitSeconds = inRange(message, "waitSeconds", expert ? EXPERT_MAX_WAIT_SECONDS : 30, MIN_WAIT_SECONDS,
+                MAX_WAIT_SECONDS);
+        if (expert) {
+            waitSeconds = Math.min(waitSeconds, EXPERT_MAX_WAIT_SECONDS);
+        }
+        boolean privateRoom = message.get("private") != null && Protocol.bool(message, "private");
         return new RoomOptions(chips, basePay, taiPay, botLevels(message), waitSeconds, speed(message),
                 name(message, hostName), privateRoom, expert);
     }

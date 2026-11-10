@@ -4,7 +4,7 @@ import java.util.Map;
 
 import ezmj.model.BadWords;
 
-/** 房間設定的讀取與檢查：金額範圍、房間名稱與私人房。 */
+/** 房間設定的讀取與檢查：金額範圍、房間名稱、私人房與專家模式的等待秒數。 */
 final class RoomOptionsTest {
 
     private RoomOptionsTest() {
@@ -81,6 +81,16 @@ final class RoomOptionsTest {
             T.eq(true, expert.expert(), "專家模式");
             T.eq(true, expert.toMessage().get("expert"), "訊息裡是 true");
             T.eq("badMessage", rejection(Map.of("expert", "yes")), "不是 true 或 false");
+        });
+        T.test("專家模式每次最多等 10 秒，比較長的改成 10 秒，不拒絕", () -> {
+            T.eq(10, from(Map.of("expert", true)).waitSeconds(), "沒給就是 10 秒");
+            T.eq(10, from(Map.of("expert", true, "waitSeconds", 30L)).waitSeconds(), "30 秒改成 10 秒");
+            T.eq(10, from(Map.of("expert", true, "waitSeconds", 300L)).waitSeconds(), "300 秒改成 10 秒");
+            T.eq(5, from(Map.of("expert", true, "waitSeconds", 5L)).waitSeconds(), "5 秒照舊");
+            T.eq(10, from(Map.of("expert", true, "waitSeconds", 30L)).toMessage().get("waitSeconds"), "訊息裡也是 10 秒");
+            T.eq("badOptions", rejection(Map.of("expert", true, "waitSeconds", 4L)), "比 5 秒短還是拒絕");
+            T.eq(30, from(Map.of("waitSeconds", 30L)).waitSeconds(), "不是專家模式照舊");
+            T.eq(30, from(Map.of()).waitSeconds(), "不是專家模式預設 30 秒");
         });
     }
 
