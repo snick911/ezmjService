@@ -12,6 +12,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
+import ezmj.model.BadWords;
+
 /** 真的開一台服務器，用 TCP 連上去打。 */
 final class ServerTest {
 
@@ -75,6 +77,18 @@ final class ServerTest {
                 T.eq("badName", client.next("error").get("code"), "空白");
                 client.send("type", "hello", "protocol", Protocol.VERSION, "name", "一".repeat(17));
                 T.eq("badName", client.next("error").get("code"), "太長");
+            }
+        });
+        test("名字有不雅字眼要拒絕，換個名字就能登入", port -> {
+            try (TestClient client = new TestClient(port)) {
+                client.send("type", "hello", "protocol", Protocol.VERSION, "name", "靠北");
+                Map<String, Object> error = client.next("error");
+                T.eq("badName", error.get("code"), "錯誤代碼");
+                T.eq(BadWords.NAME_REJECTED, error.get("message"), "可以直接顯示的訊息");
+                client.send("type", "createRoom");
+                T.eq("notLoggedIn", client.next("error").get("code"), "沒有登入，開不了房間");
+                client.send("type", "hello", "protocol", Protocol.VERSION, "name", "樹幹");
+                T.eq("樹幹", client.next("welcome").get("name"), "常用詞裡剛好有的字不算");
             }
         });
         test("失效的 token 要拒絕", port -> {
@@ -239,6 +253,21 @@ final class ServerTest {
                 T.check(listed(host, code) != null, "30 個字可以");
             }
         });
+        test("房間名稱有不雅字眼要拒絕，沒有開成也不會列出", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient other = TestClient.login(port, "你娘");
+                 TestClient visitor = new TestClient(port)) {
+                host.send("type", "createRoom", "name", "靠北牌局");
+                Map<String, Object> error = host.next("error");
+                T.eq("badRoomName", error.get("code"), "錯誤代碼");
+                T.eq(BadWords.ROOM_NAME_REJECTED, error.get("message"), "可以直接顯示的訊息");
+                // 名字本身可以，沒給名稱時補上的「你娘的房間」不行
+                other.send("type", "createRoom");
+                T.eq("badRoomName", other.next("error").get("code"), "補上的預設名稱");
+                T.check(listRooms(visitor).isEmpty(), "大廳沒有");
+                String code = createRoom(other, "name", "週末牌局");
+                T.eq("週末牌局", listed(visitor, code).get("name"), "自己取了名稱就能開");
+            }
+        });
         test("私人房不列出，但能用房號加入", port -> {
             try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
                 String code = createRoom(host, "name", "自己人", "private", true);
@@ -358,6 +387,28 @@ final class ServerTest {
                 // 字數用 code point 算，100 個表情符號可以
                 host.send("type", "chat", "text", "🀄".repeat(100));
                 T.eq("🀄".repeat(100), host.next("chat").get("text"), "100 個字");
+            }
+        });
+        test("聊天有不雅字眼整則不轉，被拒的不算在每 10 秒 5 則裡", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
+                String code = createRoom(host);
+                guest.send("type", "joinRoom", "code", code);
+                guest.next("room");
+                host.send("type", "chat", "text", "f*ck");
+                Map<String, Object> error = host.next("error");
+                T.eq("badChat", error.get("code"), "錯誤代碼");
+                T.eq(BadWords.CHAT_REJECTED, error.get("message"), "可以直接顯示的訊息");
+                host.send("type", "chat", "text", "幹 你 娘");
+                T.eq("badChat", host.next("error").get("code"), "中間夾著空白");
+                for (int i = 1; i <= 5; i++) {
+                    host.send("type", "chat", "text", "第 " + i + " 則");
+                }
+                // 被拒的要是轉出去了，客人收到的第一則就是它；要是算進頻率，第 4、5 則會被擋
+                for (int i = 1; i <= 5; i++) {
+                    T.eq("第 " + i + " 則", guest.next("chat").get("text"), "只收到沒問題的");
+                }
+                guest.send("type", "chat", "text", "幹嘛不打");
+                T.eq("幹嘛不打", until(host, "chat", m -> Long.valueOf(1).equals(m.get("seat"))).get("text"), "常用詞照轉");
             }
         });
         test("連發超過每 10 秒 5 則回 chatTooFast", port -> {

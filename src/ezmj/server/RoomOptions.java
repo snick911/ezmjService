@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import ezmj.model.BadWords;
 import ezmj.model.BotLevel;
 import ezmj.model.GameSpeed;
 
@@ -46,17 +47,21 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
                 "expert", expert);
     }
 
-    /** 字數和玩家名字一樣用 code point 算，表情符號也是一個字。 */
+    /**
+     * 字數和玩家名字一樣用 code point 算，表情符號也是一個字。
+     * 補上的預設名稱也要檢查不雅字眼：名字本身沒有，接上「的房間」卻可能有，例如「你娘」補成「你娘的房間」。
+     */
     private static String name(Map<String, Object> message, String hostName) {
         String name = message.get("name") == null ? "" : Protocol.string(message, "name").strip();
         if (name.isEmpty()) {
-            return hostName + "的房間";
-        }
-        if (name.codePointCount(0, name.length()) > MAX_NAME_LENGTH) {
+            name = hostName + "的房間";
+        } else if (name.codePointCount(0, name.length()) > MAX_NAME_LENGTH) {
             throw new Rejected("badRoomName", "房間名稱最多 " + MAX_NAME_LENGTH + " 個字");
-        }
-        if (name.chars().anyMatch(Character::isISOControl)) {
+        } else if (name.chars().anyMatch(Character::isISOControl)) {
             throw new Rejected("badRoomName", "房間名稱不能有換行或控制字元");
+        }
+        if (BadWords.contains(name)) {
+            throw new Rejected("badRoomName", BadWords.ROOM_NAME_REJECTED);
         }
         return name;
     }

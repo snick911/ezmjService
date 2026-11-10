@@ -28,6 +28,7 @@ import ezmj.engine.Round;
 import ezmj.engine.RoundEvent;
 import ezmj.engine.Settlement;
 import ezmj.engine.TurnOptions;
+import ezmj.model.BadWords;
 import ezmj.model.BotLevel;
 import ezmj.model.GameConfig;
 import ezmj.model.GameRecord;
@@ -373,7 +374,10 @@ final class Room implements TableFlow.Listener {
         startNextRound();
     }
 
-    /** 等人或牌局中都可以聊。只轉給現在連著的真人，不留歷史，斷線期間的不補送。 */
+    /**
+     * 等人或牌局中都可以聊。只轉給現在連著的真人，不留歷史，斷線期間的不補送。
+     * 有不雅字眼的整則不轉，和客戶端自己擋的一樣；在算頻率之前擋，被拒的不算一則。
+     */
     private void chat(Member member, Map<String, Object> message) {
         String text = Protocol.string(message, "text").strip();
         int length = text.codePointCount(0, text.length());
@@ -382,6 +386,9 @@ final class Room implements TableFlow.Listener {
         }
         if (text.chars().anyMatch(Character::isISOControl)) {
             throw new Rejected("badChat", "聊天訊息不能有換行或控制字元");
+        }
+        if (BadWords.contains(text)) {
+            throw new Rejected("badChat", BadWords.CHAT_REJECTED);
         }
         if (!member.mayChat(System.nanoTime() / 1_000_000)) {
             throw new Rejected("chatTooFast", "說得太快了，請稍等一下");

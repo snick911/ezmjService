@@ -2,6 +2,8 @@ package ezmj.server;
 
 import java.util.Map;
 
+import ezmj.model.BadWords;
+
 /** 房間設定的讀取與檢查：金額範圍、房間名稱與私人房。 */
 final class RoomOptionsTest {
 
@@ -49,6 +51,20 @@ final class RoomOptionsTest {
             T.eq("badRoomName", rejection(Map.of("name", "週末\n牌局")), "換行");
             T.eq("badRoomName", rejection(Map.of("name", "週末\t牌局")), "tab");
         });
+        T.test("名稱不能有不雅字眼，常用詞裡剛好有的字不算", () -> {
+            Rejected rejected = rejected(Map.of("name", "靠北牌局"));
+            T.eq("badRoomName", rejected.code(), "不雅字眼");
+            T.eq(BadWords.ROOM_NAME_REJECTED, rejected.getMessage(), "可以直接顯示的訊息");
+            T.eq("badRoomName", rejection(Map.of("name", "靠 . 北")), "中間夾著空白與標點");
+            T.eq("幹部聚餐", from(Map.of("name", "幹部聚餐")).name(), "幹部不算");
+        });
+        T.test("補上的預設名稱也檢查不雅字眼", () -> {
+            T.check(!BadWords.contains("你娘"), "名字本身沒有");
+            Rejected rejected = rejectedFor(Map.of(), "你娘");
+            T.eq("badRoomName", rejected.code(), "接上「的房間」才有");
+            T.eq(BadWords.ROOM_NAME_REJECTED, rejected.getMessage(), "可以直接顯示的訊息");
+            T.eq("週末牌局", RoomOptions.from(Map.of("name", "週末牌局"), "你娘").name(), "自己取了名稱就沒事");
+        });
         T.test("欄位型別不對要拒絕", () -> {
             T.eq("badMessage", rejection(Map.of("name", 3L)), "名稱不是字串");
             T.eq("badMessage", rejection(Map.of("private", "yes")), "私人房不是 true 或 false");
@@ -77,11 +93,15 @@ final class RoomOptionsTest {
     }
 
     private static Rejected rejected(Map<String, Object> message) {
+        return rejectedFor(message, "小明");
+    }
+
+    private static Rejected rejectedFor(Map<String, Object> message, String hostName) {
         try {
-            from(message);
+            RoomOptions.from(message, hostName);
         } catch (Rejected rejected) {
             return rejected;
         }
-        throw new AssertionError("應該要拒絕 " + message);
+        throw new AssertionError("應該要拒絕 " + message + "，房主 " + hostName);
     }
 }

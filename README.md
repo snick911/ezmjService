@@ -22,6 +22,7 @@ java -jar ezmj-server-<版號>.jar [port]
 用 `Dockerfile` 建置，服務類型是 Web Service，連接 GitHub 後每次 push 到 `main` 都會自動部署。建置時會跑全部測試，失敗的話舊版本繼續運作。
 
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
+- 服務器用到引擎的 `ezmj.model.BadWords`（見「不雅字眼」），`ezmj` 的 `9348070`（0.15.0 之後）起才有。`EZMJ_COMMIT` 指的 commit 沒有它的話建置會編譯失敗，舊版本繼續運作。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
@@ -133,14 +134,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `ping` | | 回 `pong`，不用登入 |
 | `honorRoll` | | 回 `honorRoll`，不用登入 |
 | `listRooms` | | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次 |
-| `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`（1 到 16 字），斷線重連帶 `token` |
+| `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`，斷線重連帶 `token`。`name` 去掉前後空白後 1 到 16 個字（用 code point 算），不能有控制字元與不雅字眼（見「不雅字眼」），不合格回錯誤 `badName`，這條連線還沒登入，可以換個名字再送 |
 | `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
 | `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入。`supports` 是客戶端會的功能清單，目前只有 `"expert"`：專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）。`supports` 不是清單回 `badMessage` |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
-| `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badChat`。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
+| `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元與不雅字眼，不合格回錯誤 `badChat`，整則不轉給別人。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
 | `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓 |
 | `listen` | `waitId`、`tile` | 打出這張牌並立刻報聽，之後和 `declareListen` 一樣。網頁版跟電腦打的聽牌按鈕用這個。專家模式的房間不接受，回錯誤 `illegalMove` |
@@ -159,7 +160,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `botLevels` | 三家 `NORMAL` | 三個 `BEGINNER`、`NORMAL`、`AMATEUR`、`PRO`，依序是座位 1、2、3 |
 | `waitSeconds` | 30 | 5 到 300。多人桌不能不限時 |
 | `speed` | `NORMAL` | `SLOW`、`NORMAL`、`FAST`，電腦出牌與等宣告的停頓 |
-| `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元，不合格回錯誤 `badRoomName`。只有空白等於沒給 |
+| `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元與不雅字眼，不合格回錯誤 `badRoomName`。只有空白等於沒給。補上的預設名稱也檢查不雅字眼：名字「你娘」本身可以，補成「你娘的房間」就不行，要自己取名稱 |
 | `private` | `false` | `true` 是私人房：不列在大廳，只能用房號加入 |
 | `expert` | `false` | `true` 是專家模式，房間裡每個人都一樣。服務器只做不給提示的部分：`askTurn` 的 `readyDiscards` 一律是空的、不接受 `listen`，打出牌後聽牌照樣送 `canListen`。其他（聽牌中不列出等的牌、紀錄只留一筆、牌河每家只看最後一張、不顯示剩幾張）由客戶端藏，所以加入要說 `supports`。0.6.0 和更早的服務器不認得，會當作一般房間 |
 
@@ -205,6 +206,28 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `opponents` | 另外三家，從下家起算。每項有 `seat`、`handCount`、`melds`（不含暗槓）、`concealedKongs`（暗槓組數）、`flowers`、`discards`、`chips`、`listening`（報聽了沒，聽哪些牌看不到） |
 
 `melds` 每項有 `kind`（`CHOW`、`PONG`、`OPEN_KONG`、`CONCEALED_KONG`）與 `tiles`。
+
+### 不雅字眼
+
+名字、房間名稱與聊天都不能有不雅字眼，用引擎的 `ezmj.model.BadWords` 判斷，和 Swing 版、網頁版客戶端自己擋的是同一份字詞與規則（中文跳過空白與標點、英文看 f*ck 這類寫法、幹嘛與樹幹這類常用詞不算）。新版客戶端按下去就先擋了，服務器再擋一次是為了改過的程式與還沒有這項檢查的舊版客戶端，大廳列表、牌桌上的名字與聊天才不會出現不雅字眼。
+
+| 哪裡 | 錯誤碼 | `message` |
+|---|---|---|
+| `hello` 的 `name` | `badName` | 「名字不能有不雅的字眼，請換一個名字。」 |
+| `createRoom` 的 `name`，包括補上的預設名稱 | `badRoomName` | 「房間名稱不能有不雅的字眼，請換一個名稱。」 |
+| `chat` 的 `text` | `badChat` | 「訊息裡有不雅的字眼，沒有送出。」 |
+
+`message` 直接用 `BadWords` 的 `NAME_REJECTED`、`ROOM_NAME_REJECTED`、`CHAT_REJECTED`，和客戶端自己擋時跳的提醒一字不差。錯誤碼都是原本就有的，舊版客戶端不用改就會顯示：名字被拒時回到表單並顯示 `message`，`badChat` 顯示在聊天區。協定版本不變。
+
+名字只在 `hello` 送一次，客戶端按下「開房間」或「加入」時才帶名字送 `hello`，接著才送 `createRoom` 或 `joinRoom`，所以開房間與加入的名字都在 `hello` 擋，登入之後的名字一定沒問題。
+
+聊天選擇直接拒絕，不遮起來再轉：
+
+- 和客戶端一致。新版客戶端有不雅字眼就不送，服務器也不轉，大家看到的結果一樣。
+- 發話的人馬上知道沒送出，原因就在聊天區。遮起來再轉的話，他以為大家看到原文，其實別人看到的是「＊＊」。
+- 舊版客戶端不會遮收到的聊天，只有服務器不轉，它們才不會看到。新版客戶端收到聊天時還是會用 `BadWords.mask` 遮一次，給沒有這項檢查的舊服務器用。
+
+字詞要加減或判斷錯了，改 `ezmj` 的 `BadWords`，三邊一起換：服務器要重新建置，部署到 Render 時還要把 `Dockerfile` 的 `EZMJ_COMMIT` 換成新的 commit。`EZMJ_COMMIT` 指的 commit 沒有 `BadWords` 的話編譯會失敗，見「部署到 Render」。
 
 ### 斷線重連
 

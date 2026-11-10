@@ -17,6 +17,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+import ezmj.model.BadWords;
+
 /**
  * 台灣十六張麻將的多人連線服務器。牌局規則全部由服務器上的引擎決定，客戶端只送決定、只收看得到的局面。
  * 協定是 TCP 上一行一則 JSON，訊息內容見 README 的「連線協定」。
@@ -273,11 +275,18 @@ public final class EzmjServer implements Connection.Handler {
                 "room", room == null ? null : room.code());
     }
 
+    /**
+     * 客戶端按下開房間或加入時才帶名字送 hello，所以在這裡擋，開房間與加入都不會再看到名字。
+     * 不雅字眼用引擎的 BadWords，和 Swing 版、網頁版擋的是同一份。
+     */
     private static String normalizedName(String raw) {
         String name = raw.strip();
         int length = name.codePointCount(0, name.length());
         if (length == 0 || length > MAX_NAME_LENGTH || name.chars().anyMatch(Character::isISOControl)) {
             throw new Rejected("badName", "名字要是 1 到 " + MAX_NAME_LENGTH + " 個字");
+        }
+        if (BadWords.contains(name)) {
+            throw new Rejected("badName", BadWords.NAME_REJECTED);
         }
         return name;
     }
