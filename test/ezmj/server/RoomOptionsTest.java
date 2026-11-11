@@ -37,6 +37,13 @@ final class RoomOptionsTest {
             T.eq(false, options.privateRoom(), "預設公開");
             T.eq("小明的房間", from(Map.of("name", "   ")).name(), "只有空白也用預設");
         });
+        T.test("隨時補位預設關閉，給了 true 才開，送回去的設定也有", () -> {
+            T.eq(false, from(Map.of()).substitute(), "預設關閉");
+            RoomOptions options = from(Map.of("substitute", true));
+            T.eq(true, options.substitute(), "開啟");
+            T.eq(true, options.toMessage().get("substitute"), "訊息裡也有");
+            T.eq("badMessage", rejection(Map.of("substitute", "yes")), "不是 true 或 false");
+        });
         T.test("名稱去掉前後空白，最多 30 個字", () -> {
             T.eq("週末牌局", from(Map.of("name", "  週末牌局 ")).name(), "去掉空白");
             T.eq("一".repeat(30), from(Map.of("name", "一".repeat(30))).name(), "剛好 30 個字");

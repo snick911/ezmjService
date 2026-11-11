@@ -87,7 +87,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `EzmjServer` | 程式進入點、接受連線、登入與重連、開房間與加入、大廳的房間列表 |
 | `Connection` | 一條連線，TCP 或 WebSocket 都是一則訊息一則 JSON。讀寫各一條執行緒，慢的客戶端不會卡住牌桌 |
 | `WebSocket` | 同一個 port 上的 HTTP：健康檢查、狀態、升級成 WebSocket、讀寫訊框 |
-| `Room` | 一間房間：等人、開局，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上，大廳列表只讀它在那裡做好的摘要 `Room.Listing` |
+| `Room` | 一間房間：等人、開局、隨時補位的換人，把 `ezmj.table.TableFlow` 接到連線上。狀態都在房間自己的一條執行緒上，大廳列表只讀它在那裡做好的摘要 `Room.Listing` |
+| `SubstituteBots` | 隨時補位的房間交給 `TableFlow` 的代打：開局時是電腦的座位照房間設定的等級打，真人留下的座位由職業等級代打 |
 | `Views` | 把局面轉成送給某個座位的訊息，防作弊的關卡 |
 | `RoomOptions` | 房間設定與檢查 |
 | `HonorBoard` | 榮譽榜：記下打完的成績、在背景同步、組成訊息。排序與內容格式用引擎的 `ezmj.model.HonorRoll` |
@@ -133,11 +134,11 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|---|
 | `ping` | | 回 `pong`，不用登入 |
 | `honorRoll` | | 回 `honorRoll`，不用登入 |
-| `listRooms` | | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次 |
+| `listRooms` | 可以加 `supports` | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次。`supports` 有 `"substitute"` 才會列出可以補位的牌局，見「隨時補位」 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`，斷線重連帶 `token`。`name` 去掉前後空白後 1 到 16 個字（用 code point 算），不能有控制字元與不雅字眼（見「不雅字眼」），不合格回錯誤 `badName`，這條連線還沒登入，可以換個名字再送 |
 | `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
-| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入。`supports` 是客戶端會的功能清單，目前只有 `"expert"`：專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）。`supports` 不是清單回 `badMessage` |
-| `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打 |
+| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入（`gameInProgress`），隨時補位的房間例外，見「隨時補位」。`supports` 是客戶端會的功能清單：`"expert"` 是專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）；`"substitute"` 是會中途補位。`supports` 不是清單回 `badMessage` |
+| `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打。還在等補位的話就是不等了 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
@@ -163,6 +164,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `name` | 「<房主名字>的房間」 | 房間名稱。去掉前後空白後最多 30 個字（用 code point 算），不能有控制字元與不雅字眼，不合格回錯誤 `badRoomName`。只有空白等於沒給。補上的預設名稱也檢查不雅字眼：名字「你娘」本身可以，補成「你娘的房間」就不行，要自己取名稱 |
 | `private` | `false` | `true` 是私人房：不列在大廳，只能用房號加入 |
 | `expert` | `false` | `true` 是專家模式，房間裡每個人都一樣。服務器只做不給提示的部分：`askTurn` 的 `readyDiscards` 一律是空的、不接受 `listen`，打出牌後聽牌照樣送 `canListen`。其他（聽牌中不列出等的牌、紀錄只留一筆、牌河每家只看最後一張、不顯示剩幾張）由客戶端藏，所以加入要說 `supports`。0.6.0 和更早的服務器不認得，會當作一般房間 |
+| `substitute` | `false` | `true` 是隨時補位：牌局中電腦在打的座位，別人可以中途加入替換，見「隨時補位」。0.9.1 和更早的服務器不認得，會當作一般房間 |
 
 金額超出範圍、底或每台大於籌碼本金（等於可以），或其他設定不合理時回錯誤 `badOptions`，`message` 可以直接顯示。
 
@@ -175,13 +177,15 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `type` | 欄位 | 說明 |
 |---|---|---|
 | `pong` | | |
-| `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記打到結束的真人，中途離開或斷線由電腦接手過的座位不列入 |
+| `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記開局就坐著、打到結束的真人，中途離開、斷線由電腦接手過的座位與中途補位的都不列入 |
 | `welcome` | `protocol`、`version`、`token`、`name`、`room` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人 |
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
-| `rooms` | `rooms`、`online`、`playingRooms` | 回 `listRooms`。只列還在等人（`lobby`）、不是私人房、真人不到四位的房間，新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字）、`humans`（目前坐著的真人數）、`options`（和 `room` 的 `options` 一樣）。`online` 是目前的連線數，看大廳的也算；`playingRooms` 是牌局進行中的房間數，私人房與一人房間也算。0.4.0 和更早的服務器沒有這兩個欄位 |
+| `rooms` | `rooms`、`online`、`playingRooms` | 回 `listRooms`。列出還在等人（`lobby`）、不是私人房、真人不到四位的房間；`listRooms` 說了 `supports` `"substitute"` 的話，再加上牌局中、可以補位的房間（見「隨時補位」）。等人的在前面，接著是可以補位的，各自新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字，牌局中是開局時的名字）、`humans`（目前坐著的真人數）、`playing`（牌局中、可以補位）、`openSeats`（還能坐幾個人：等人時是空位數，牌局中是可以替換的電腦數）、`options`（和 `room` 的 `options` 一樣）。`online` 是目前的連線數，看大廳的也算；`playingRooms` 是牌局進行中的房間數，私人房與一人房間也算。0.4.0 和更早的服務器沒有這兩個欄位，0.9.1 和更早的沒有 `playing` 與 `openSeats` |
 | `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`options` 是房間設定，`name` 已經補上預設，一定有值。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
 | `chat` | `seat`、`name`、`text` | 房間裡有人聊天，送給房間裡連著的每一位真人，發話的人自己也會收到。`seat` 與 `name` 是發話的人。不保留歷史，斷線期間的訊息不補送 |
 | `left` | | 已經離開房間 |
+| `substituteWaiting` | `seat`、`replacing`、`computer` | 只送給你：隨時補位的房間正在打，已經替你保留座位 `seat`，等那個座位的電腦打完這一手就換你上場。`replacing` 是現在那個座位的名字；`computer` 是 true 表示開局時就是電腦，false 表示是離開的玩家留下、由電腦代打的座位。斷線重連時再送一次 |
+| `substituted` | `seat`、`name`、`replaced`、`computer` | 有人補位上場了，全桌都收到，補位的本人也收到（在他的 `room` 與 `state` 之後）。`name` 是補位的人，`replaced` 是被換掉的座位原本的名字，`computer` 同 `substituteWaiting`。客戶端要寫得明顯，例如「玩家 小明 替換電腦（阿土伯）加入」 |
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
 | `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來 |
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
@@ -228,6 +232,19 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 - 舊版客戶端不會遮收到的聊天，只有服務器不轉，它們才不會看到。新版客戶端收到聊天時還是會用 `BadWords.mask` 遮一次，給沒有這項檢查的舊服務器用。
 
 字詞要加減或判斷錯了，改 `ezmj` 的 `BadWords`，三邊一起換：服務器要重新建置，部署到 Render 時還要把 `Dockerfile` 的 `EZMJ_COMMIT` 換成新的 commit。`EZMJ_COMMIT` 指的 commit 沒有 `BadWords` 的話編譯會失敗，見「部署到 Render」。
+
+### 隨時補位
+
+開房間時 `substitute` 給 `true`，牌局中電腦在打的座位就可以中途有人加入替換：開局時沒人坐、由電腦補上的座位，以及玩家按了 `leave` 離開、由電腦打到最後的座位。斷線的玩家還會回來，他的座位不算。
+
+1. 客戶端在 `joinRoom` 的 `supports` 說 `"substitute"`。沒說的回錯誤 `substituteNotSupported`（看不懂補位訊息的舊客戶端不讓它加入）；電腦都有人換了或在等了，回錯誤 `noOpenSeat`；房間不是隨時補位的照舊回 `gameInProgress`。
+2. 服務器保留座位號碼最小的那個，送 `substituteWaiting`。牌局照走，不等他。還沒上場時收不到牌桌的任何訊息，送什麼都回錯誤 `notSeatedYet`，只能 `leave` 取消（回 `left`）；斷線也算取消。保留的座位不再算進大廳的 `openSeats`。
+3. 那個座位的電腦打出牌（這一手打完）就換人；這局在那之前結束的話，下一局開始前換，整局都是他打。換人時他收到 `room`（`yourSeat` 是那個座位）；這局還在打的話接著是 `state`，還能報聽就是 `canListen`。最後全桌都收到 `substituted`，別人的 `room` 裡那個座位換成他的名字、`human` 是 true。
+4. 整場在他上場前就打完的話，他直接坐進等人的房間（收到 `lobby` 的 `room`），可以打下一場。
+
+電腦等的時間通常只有一兩手：補位的人不用從頭等一整局，牌局也不會因為有人加入而停下來。中途補位的座位不列入榮譽榜，就算之後一直打到結束也一樣；開局就坐著的人照舊列入。
+
+在服務器裡，這種房間四個座位對 `TableFlow` 都是真人，電腦的座位一開局就是代打中，換人就是關掉代打，和斷線重連接回一樣，引擎不用改。代打照座位分：開局時是電腦的座位照房間設定的等級與個性打，和一般房間一樣；開局時是真人、後來離開或斷線的座位由職業等級代打（`SubstituteBots`）。
 
 ### 斷線重連
 

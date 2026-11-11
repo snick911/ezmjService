@@ -709,7 +709,7 @@ final class ServerTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> listRooms(TestClient client) throws IOException {
+    static List<Map<String, Object>> listRooms(TestClient client) throws IOException {
         client.send("type", "listRooms");
         return (List<Map<String, Object>>) client.next("rooms").get("rooms");
     }
@@ -723,7 +723,7 @@ final class ServerTest {
     }
 
     /** 列表上的這間房間，沒有列出時是 null。 */
-    private static Map<String, Object> listed(TestClient client, String code) throws IOException {
+    static Map<String, Object> listed(TestClient client, String code) throws IOException {
         for (Map<String, Object> entry : listRooms(client)) {
             if (code.equals(entry.get("code"))) {
                 return entry;
@@ -736,7 +736,7 @@ final class ServerTest {
         return (String) lastOfType(client, "room").get("code");
     }
 
-    private static Map<String, Object> honorRoll(int port) throws IOException {
+    static Map<String, Object> honorRoll(int port) throws IOException {
         try (TestClient client = new TestClient(port)) {
             client.send("type", "honorRoll");
             return client.next("honorRoll");
@@ -779,7 +779,7 @@ final class ServerTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static void checkHonorsOnlyFrom(int port, Set<String> names) throws IOException {
+    static void checkHonorsOnlyFrom(int port, Set<String> names) throws IOException {
         Map<String, Object> honors = honorRoll(port);
         for (String category : HONOR_CATEGORIES) {
             for (Map<String, Object> entry : (List<Map<String, Object>>) honors.get(category)) {
@@ -790,8 +790,13 @@ final class ServerTest {
 
     /** 每個案例一台新的服務器。 */
     static void test(String name, Scenario scenario) {
+        test(name, FAST, scenario);
+    }
+
+    /** 和上面一樣，但時間設定自己給，例如要讓結果畫面停久一點。 */
+    static void test(String name, Timing timing, Scenario scenario) {
         T.test(name, () -> T.inTempFolder(folder -> {
-            EzmjServer server = new EzmjServer(0, FAST, HonorStore.file(folder.resolve("honor.properties")));
+            EzmjServer server = new EzmjServer(0, timing, HonorStore.file(folder.resolve("honor.properties")));
             server.start();
             try {
                 scenario.run(server.port());
@@ -829,12 +834,12 @@ final class ServerTest {
         }
     }
 
-    private static Map<String, Object> until(TestClient client, String type, Predicate<Map<String, Object>> wanted) {
+    static Map<String, Object> until(TestClient client, String type, Predicate<Map<String, Object>> wanted) {
         return client.until(m -> type.equals(m.get("type")) && wanted.test(m), type);
     }
 
     /** 等到輪到自己，中間問要不要宣告的都過，才不用等倒數。 */
-    private static Map<String, Object> untilAskTurn(TestClient client) throws IOException {
+    static Map<String, Object> untilAskTurn(TestClient client) throws IOException {
         while (true) {
             Map<String, Object> ask = client.until(m -> "askTurn".equals(m.get("type")) || "askClaim".equals(m.get("type")), "輪到真人");
             if ("askTurn".equals(ask.get("type"))) {
@@ -869,7 +874,7 @@ final class ServerTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static boolean isConnected(Map<String, Object> room, int seat) {
+    static boolean isConnected(Map<String, Object> room, int seat) {
         for (Map<String, Object> player : (List<Map<String, Object>>) room.get("players")) {
             if (Long.valueOf(seat).equals(player.get("seat"))) {
                 return Boolean.TRUE.equals(player.get("connected"));
@@ -898,7 +903,7 @@ final class ServerTest {
     }
 
     /** 朝胡牌打：打最孤立的牌，能吃碰就吃碰，不然傻傻打可能一直流局。 */
-    private static Map<String, Object> playUntilOver(TestClient client) throws Exception {
+    static Map<String, Object> playUntilOver(TestClient client) throws Exception {
         Map<String, Object> state = null;
         while (true) {
             Map<String, Object> message = client.poll();
@@ -1023,7 +1028,7 @@ final class ServerTest {
         T.check(dealerChanges > 0, "要換過莊");
     }
 
-    private static Map<String, Object> lastOfType(TestClient client, String type) {
+    static Map<String, Object> lastOfType(TestClient client, String type) {
         synchronized (client.seen) {
             for (int i = client.seen.size() - 1; i >= 0; i--) {
                 if (type.equals(client.seen.get(i).get("type"))) {

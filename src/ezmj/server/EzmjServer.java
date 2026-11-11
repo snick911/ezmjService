@@ -191,7 +191,7 @@ public final class EzmjServer implements Connection.Handler {
         } else if (type.equals("honorRoll")) {
             connection.send(honorBoard.toMessage());
         } else if (type.equals("listRooms")) {
-            connection.send(roomList());
+            connection.send(roomList(supports(message, "substitute")));
         } else if (type.equals("hello")) {
             hello(connection, message);
         } else {
@@ -314,10 +314,10 @@ public final class EzmjServer implements Connection.Handler {
         if (room.isExpert() && !supports(message, "expert")) {
             throw new Rejected("expertNotSupported", "這間是專家模式的房間，這個版本的程式還不能加入，請用網頁版");
         }
-        room.join(member);
+        room.join(member, supports(message, "substitute"));
     }
 
-    /** joinRoom 的 supports 列出客戶端會的功能，例如 "expert"。舊的客戶端沒有這個欄位。 */
+    /** joinRoom 與 listRooms 的 supports 列出客戶端會的功能，例如 "expert"、"substitute"。舊的客戶端沒有這個欄位。 */
     private static boolean supports(Map<String, Object> message, String feature) {
         Object value = message.get("supports");
         if (value == null) {
@@ -330,22 +330,25 @@ public final class EzmjServer implements Connection.Handler {
     }
 
     /**
-     * 大廳上還能加入的房間，新開的在前面。另外帶目前的連線數與牌局進行中的房間數：
+     * 大廳上還能加入的房間：等人中的在前面，接著是可以補位的牌局，各自新開的在前面。
+     * 可以補位的牌局只列給會補位的客戶端（substitutes），舊的客戶端加不進去，列出來只會讓人按了被拒絕。
+     * 另外帶目前的連線數與牌局進行中的房間數：
      * 看大廳的人也連著，所以連線數就是開著遊戲的人數，連線剛建立還沒送訊息的也算在內。
      */
-    private Map<String, Object> roomList() {
+    private Map<String, Object> roomList(boolean substitutes) {
         List<Room.Listing> listings = new ArrayList<>();
         int playing = 0;
         for (Room room : rooms.values()) {
             Room.Listing listing = room.listing();
-            if (listing != null) {
+            if (listing != null && (substitutes || !listing.playing())) {
                 listings.add(listing);
             }
             if (room.isPlaying()) {
                 playing++;
             }
         }
-        listings.sort(Comparator.comparingLong(Room.Listing::opened).reversed());
+        listings.sort(Comparator.comparing(Room.Listing::playing)
+                .thenComparing(Comparator.comparingLong(Room.Listing::opened).reversed()));
         List<Object> entries = new ArrayList<>();
         for (Room.Listing listing : listings.subList(0, Math.min(listings.size(), MAX_LISTED_ROOMS))) {
             entries.add(listing.entry());

@@ -15,9 +15,10 @@ import ezmj.model.GameSpeed;
  * 專家模式不給打牌前的聽牌提示（askTurn 的 readyDiscards 是空的、不接受 listen），其他看不到的資訊由客戶端藏起來；
  * 加入時沒說支援專家模式的客戶端進不來，見 EzmjServer.joinRoom。
  * 專家模式每次最多等 EXPERT_MAX_WAIT_SECONDS 秒，送來比較長的（例如還不知道這條規則的舊客戶端）就改成這個，不拒絕。
+ * substitute 是隨時補位：牌局中還有電腦在打的座位，別人可以中途加入替換，見 Room 的補位；中途加入的不列入榮譽榜。
  */
 record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels, int waitSeconds, GameSpeed speed,
-        String name, boolean privateRoom, boolean expert) {
+        String name, boolean privateRoom, boolean expert, boolean substitute) {
 
     private static final int MAX_CHIPS = 10_000_000;
     private static final int MAX_PAY = 1_000_000;
@@ -42,8 +43,9 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
             waitSeconds = Math.min(waitSeconds, EXPERT_MAX_WAIT_SECONDS);
         }
         boolean privateRoom = message.get("private") != null && Protocol.bool(message, "private");
+        boolean substitute = message.get("substitute") != null && Protocol.bool(message, "substitute");
         return new RoomOptions(chips, basePay, taiPay, botLevels(message), waitSeconds, speed(message),
-                name(message, hostName), privateRoom, expert);
+                name(message, hostName), privateRoom, expert, substitute);
     }
 
     Map<String, Object> toMessage() {
@@ -51,7 +53,7 @@ record RoomOptions(int chips, int basePay, int taiPay, List<BotLevel> botLevels,
         botLevels.forEach(level -> levels.add(level.name()));
         return Protocol.object("chips", chips, "basePay", basePay, "taiPay", taiPay, "botLevels", levels,
                 "waitSeconds", waitSeconds, "speed", speed.name(), "name", name, "private", privateRoom,
-                "expert", expert);
+                "expert", expert, "substitute", substitute);
     }
 
     /**

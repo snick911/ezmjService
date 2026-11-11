@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +43,12 @@ import ezmj.table.TableFlow;
  * 真人從座位 0 往後坐，開局前有人離開就往前補，所以座位 0 一定是真人，也是房主；
  * 引擎的 SeatedBots 只替座位 1 到 3 決定，靠這點才接得上。
  * 玩家不能自己開電腦代打；只有牌局中斷線或離開的人才由電腦接手，座位不變，牌桌才不會卡住。
+ *
+ * 隨時補位（RoomOptions.substitute）：牌局中電腦在打的座位（沒人坐，或坐的人已經離開），別人可以加入替換。
+ * 加入時先保留座位，牌局照走不等他；等那個座位的電腦打出牌（這一手打完）才換人，這局先結束就等下一局開始前換。
+ * 整場先打完的話，他就坐進等人的房間。換人靠 TableFlow 的代打：這種房間四個座位對 TableFlow 都是真人，
+ * 電腦的座位一開局就是代打中，換人時關掉代打，和斷線重連接回一樣，見 SubstituteBots。
+ * 中途補位的座位不列入榮譽榜。
  */
 final class Room implements TableFlow.Listener {
 
@@ -57,8 +64,11 @@ final class Room implements TableFlow.Listener {
     private record Ask(int waitId, Map<String, Object> message, List<Claim> claims) {
     }
 
-    /** 大廳列表上的一間房間。opened 越大越晚開；entry 做好之後就不再改，可以給任何執行緒讀。 */
-    record Listing(long opened, Map<String, Object> entry) {
+    /**
+     * 大廳列表上的一間房間。opened 越大越晚開；playing 是牌局中、可以補位的房間，只列給會補位的客戶端。
+     * entry 做好之後就不再改，可以給任何執行緒讀。
+     */
+    record Listing(long opened, boolean playing, Map<String, Object> entry) {
     }
 
     private final EzmjServer server;
@@ -72,6 +82,13 @@ final class Room implements TableFlow.Listener {
     private final Set<Integer> readySeats = new HashSet<>();
     /** 這場曾經由電腦接手的座位，就算接回來了成績也不算本人的。 */
     private final Set<Integer> takenOver = new HashSet<>();
+    /**
+     * 等著補位的人，鍵是要換掉的座位，member.seat 也是那個座位。還沒坐上去，不在 seats 裡，
+     * 所以收不到牌桌的訊息，也不能做任何決定，見 dispatch。
+     */
+    private final Map<Integer, Member> pendingSubstitutes = new HashMap<>();
+    /** 這場中途補位坐進來的座位。榮譽榜只看開局時的 people，所以這些本來就不列入。 */
+    private final Set<Integer> substituted = new HashSet<>();
 
     private State state = State.LOBBY;
     private GameSession session;
@@ -121,11 +138,19 @@ final class Room implements TableFlow.Listener {
         return options.expert();
     }
 
-    /** 等到坐下才回來，房間滿了或已經關了就丟出 Rejected。 */
+    /** 開房間的人坐下。 */
     void join(Member member) {
+        join(member, false);
+    }
+
+    /**
+     * 等到坐下（或保留好補位的座位）才回來，房間滿了或已經關了就丟出 Rejected。
+     * canSubstitute 是客戶端會中途補位（joinRoom 的 supports 有 "substitute"），沒有的話開打的房間一律不能加入。
+     */
+    void join(Member member, boolean canSubstitute) {
         Future<?> seating;
         try {
-            seating = executor.submit(() -> seat(member));
+            seating = executor.submit(() -> seat(member, canSubstitute));
         } catch (RejectedExecutionException closed) {
             throw new Rejected("noSuchRoom", "找不到這個房間");
         }
@@ -166,6 +191,10 @@ final class Room implements TableFlow.Listener {
             if (member.room != this || member.connection != null) {
                 return;
             }
+            // 還在等補位的就不等了，座位留給別人；重連回來要重新加入
+            if (cancelSubstitute(member)) {
+                return;
+            }
             if (state == State.LOBBY) {
                 removeFromLobby(member);
                 return;
@@ -181,6 +210,11 @@ final class Room implements TableFlow.Listener {
     void reconnected(Member member) {
         post(() -> {
             if (member.room != this) {
+                return;
+            }
+            // 還沒上場的人沒有局面可補，再告訴他一次在等哪個座位
+            if (isPendingSubstitute(member)) {
+                member.send(substituteWaitingMessage(member.seat));
                 return;
             }
             cancelAbandon.run();
@@ -213,6 +247,15 @@ final class Room implements TableFlow.Listener {
     }
 
     private void dispatch(Member member, String type, Map<String, Object> message) {
+        // 還沒上場：member.seat 是電腦還在打的座位，不能讓他替電腦做任何決定，只能取消
+        if (isPendingSubstitute(member)) {
+            if (!type.equals("leave")) {
+                throw new Rejected("notSeatedYet", "還沒換你上場，請稍等");
+            }
+            cancelSubstitute(member);
+            member.send(Protocol.object("type", "left"));
+            return;
+        }
         switch (type) {
             case "leave":
                 leave(member);
@@ -247,7 +290,11 @@ final class Room implements TableFlow.Listener {
         }
     }
 
-    private void seat(Member member) {
+    private void seat(Member member, boolean canSubstitute) {
+        if (state == State.PLAYING && options.substitute()) {
+            reserveSeat(member, canSubstitute);
+            return;
+        }
         if (state != State.LOBBY) {
             throw new Rejected("gameInProgress", "這間房間已經開打了");
         }
@@ -269,6 +316,104 @@ final class Room implements TableFlow.Listener {
             }
         }
         return count;
+    }
+
+    /**
+     * 中途補位：先保留一個電腦在打的座位，牌局照走不等他。換人見 event 與 startNextRound。
+     * 不會補位的客戶端（例如還沒有這個功能的 Swing 版）看不懂補位的訊息，所以不讓它加入。
+     */
+    private void reserveSeat(Member member, boolean canSubstitute) {
+        if (!canSubstitute) {
+            throw new Rejected("substituteNotSupported", "這間房間正在打，這個版本的程式還不能中途補位，請用網頁版");
+        }
+        List<Integer> open = openSeats();
+        if (open.isEmpty()) {
+            throw new Rejected("noOpenSeat", "這桌已經沒有電腦可以替換了");
+        }
+        int seat = open.get(0);
+        pendingSubstitutes.put(seat, member);
+        member.seat = seat;
+        member.room = this;
+        // 列表先跟上，收到 substituteWaiting 時大廳已經不算這個空位
+        updateListing();
+        member.send(substituteWaitingMessage(seat));
+    }
+
+    /** 補位可以換掉的座位：牌局中沒有人坐（電腦在打）、也還沒有人在等的。斷線的人還會回來，不算。 */
+    private List<Integer> openSeats() {
+        List<Integer> open = new ArrayList<>();
+        if (state == State.PLAYING && options.substitute()) {
+            for (int seat = 0; seat < SEATS; seat++) {
+                if (seats[seat] == null && !pendingSubstitutes.containsKey(seat)) {
+                    open.add(seat);
+                }
+            }
+        }
+        return open;
+    }
+
+    private boolean isPendingSubstitute(Member member) {
+        return pendingSubstitutes.get(member.seat) == member;
+    }
+
+    /** 不等補位了，座位留給別人。他不是在等補位的就回傳 false。 */
+    private boolean cancelSubstitute(Member member) {
+        if (!isPendingSubstitute(member)) {
+            return false;
+        }
+        pendingSubstitutes.remove(member.seat);
+        member.room = null;
+        server.forget(member);
+        updateListing();
+        return true;
+    }
+
+    /** computer 表示這個座位開局時就是電腦；不然是離開的玩家留下、由電腦代打的座位，replacing 是那位玩家的名字。 */
+    private Map<String, Object> substituteWaitingMessage(int seat) {
+        return Protocol.object("type", "substituteWaiting", "seat", seat, "replacing", names[seat],
+                "computer", !people.contains(seat));
+    }
+
+    /** 這個座位的電腦打出牌了，在等的人可以上場。這局已經結束的話，留給下一局開始前的 seatSubstitutes。 */
+    private void substituteAfterDiscard(int seat) {
+        if (state == State.PLAYING && pendingSubstitutes.containsKey(seat) && lastRoundEnd == null
+                && flow.round().phase() != Round.Phase.FINISHED) {
+            seatSubstitute(seat, true);
+        }
+    }
+
+    /** 下一局開始前，還在等的人都上場，整局都是他打。 */
+    private void seatSubstitutes() {
+        for (int seat : List.copyOf(pendingSubstitutes.keySet())) {
+            seatSubstitute(seat, false);
+        }
+    }
+
+    /**
+     * 關掉代打就換人，和重連接回一樣。roundInProgress 時補上這局的局面，還能報聽也告訴他；
+     * 下一局開始前換的就等 roundStart 與發牌後的局面。最後全桌都收到 substituted，畫面上要寫得明顯。
+     */
+    private void seatSubstitute(int seat, boolean roundInProgress) {
+        Member member = pendingSubstitutes.remove(seat);
+        String replaced = names[seat];
+        boolean computer = !people.contains(seat);
+        seats[seat] = member;
+        names[seat] = member.name;
+        substituted.add(seat);
+        flow.setAutoPlay(seat, false);
+        // 全桌都斷線時已經在倒數關房間，現在有人連著坐下了
+        cancelAbandon.run();
+        cancelAbandon = () -> { };
+        broadcastRoom();
+        if (roundInProgress) {
+            sendState(seat);
+            int listenId = flow.listenOffer(seat);
+            if (listenId != 0) {
+                member.send(canListenMessage(listenId));
+            }
+        }
+        broadcast(Protocol.object("type", "substituted", "seat", seat, "name", member.name, "replaced", replaced,
+                "computer", computer));
     }
 
     private void leave(Member member) {
@@ -339,7 +484,11 @@ final class Room implements TableFlow.Listener {
                 List.of(session.personality(1), session.personality(2), session.personality(3)),
                 config.basePay(), config.taiPay(), random);
         Bot proxy = new ComputerBot(BotLevel.PRO, config.basePay(), config.taiPay(), random);
-        flow = new TableFlow(session, people, bot, proxy, new TableFlow.Pacing() {
+        // 隨時補位：四個座位都交給 TableFlow 當真人，電腦的座位從開局就代打，換人時關掉代打就好，見 SubstituteBots
+        boolean substitute = options.substitute();
+        Set<Integer> flowPeople = substitute ? Set.of(0, 1, 2, 3) : people;
+        Bot flowProxy = substitute ? new SubstituteBots(people, bot, proxy) : proxy;
+        flow = new TableFlow(session, flowPeople, bot, flowProxy, new TableFlow.Pacing() {
             @Override
             public int turnDelayMs() {
                 return timing.instantBots() ? 0 : options.speed().turnDelayMs();
@@ -355,6 +504,13 @@ final class Room implements TableFlow.Listener {
                 return options.waitSeconds();
             }
         }, this::after, this);
+        if (substitute) {
+            for (int seat = 0; seat < SEATS; seat++) {
+                if (!people.contains(seat)) {
+                    flow.setAutoPlay(seat, true);
+                }
+            }
+        }
         state = State.PLAYING;
         broadcastRoom();
         flow.startRound();
@@ -401,6 +557,7 @@ final class Room implements TableFlow.Listener {
         cancelNextRound = () -> { };
         lastRoundEnd = null;
         readySeats.clear();
+        seatSubstitutes();
         flow.startRound();
     }
 
@@ -510,12 +667,19 @@ final class Room implements TableFlow.Listener {
                 seats[seat] = null;
             }
         }
+        for (Member member : pendingSubstitutes.values()) {
+            member.send(Protocol.object("type", "roomClosed", "reason", reason));
+            member.room = null;
+            server.forget(member);
+        }
+        pendingSubstitutes.clear();
         server.roomClosed(this);
         executor.shutdownNow();
     }
 
     /**
-     * 打到結束才記錄，電腦和由電腦接手過的座位都不算。
+     * 打到結束才記錄，電腦、由電腦接手過的座位與中途補位的都不算：people 是開局時的真人，補位的座位不在裡面，
+     * 補到離開的人留下的座位也已經在 takenOver 裡。
      * 引擎只知道房主的名字，所以名字要換成開局時定下的。
      */
     private void recordHonors() {
@@ -531,7 +695,7 @@ final class Room implements TableFlow.Listener {
         server.honorBoard().add(records);
     }
 
-    /** 打完回到等人的狀態，可以再開一場；斷線的人就不等了。 */
+    /** 打完回到等人的狀態，可以再開一場；斷線的人就不等了。還在等補位的人來不及上場，直接坐進房間等下一場。 */
     private void finishGame() {
         flow.stop();
         flow = null;
@@ -540,6 +704,7 @@ final class Room implements TableFlow.Listener {
         lastRoundEnd = null;
         readySeats.clear();
         takenOver.clear();
+        substituted.clear();
         cancelAbandon.run();
         cancelAbandon = () -> { };
         state = State.LOBBY;
@@ -555,6 +720,9 @@ final class Room implements TableFlow.Listener {
                 server.forget(member);
             }
         }
+        // 斷線就取消了，所以還在等的都連著；保留的座位都是空的，加起來不會超過四位
+        staying.addAll(pendingSubstitutes.values());
+        pendingSubstitutes.clear();
         reseat(staying);
     }
 
@@ -604,18 +772,34 @@ final class Room implements TableFlow.Listener {
         }
     }
 
+    /**
+     * 等人中、還有空位的公開房間列出來；牌局中的只有隨時補位、還有電腦可以換的才列，playing 是 true。
+     * 補位保留或取消座位時也要呼叫，空位數才對。
+     */
     private void updateListing() {
         playing = state == State.PLAYING;
         int humans = humanCount();
-        if (state != State.LOBBY || options.privateRoom() || humans == 0 || humans == SEATS) {
+        if (options.privateRoom()) {
             listing = null;
-            return;
+        } else if (state == State.LOBBY) {
+            listing = humans == 0 || humans == SEATS ? null : listing(false, seats[0].name, humans, SEATS - humans);
+        } else if (state == State.PLAYING) {
+            // 房主可能已經離開，用開局時定下的名字
+            int open = openSeats().size();
+            listing = open == 0 ? null : listing(true, names[0], humans, open);
+        } else {
+            listing = null;
         }
-        listing = new Listing(opened, Collections.unmodifiableMap(Protocol.object(
+    }
+
+    private Listing listing(boolean inGame, String host, int humans, int openSeats) {
+        return new Listing(opened, inGame, Collections.unmodifiableMap(Protocol.object(
                 "code", code,
                 "name", options.name(),
-                "host", seats[0].name,
+                "host", host,
                 "humans", humans,
+                "playing", inGame,
+                "openSeats", openSeats,
                 "options", Collections.unmodifiableMap(options.toMessage()))));
     }
 
@@ -623,7 +807,7 @@ final class Room implements TableFlow.Listener {
         List<Object> players = new ArrayList<>();
         for (int seat = 0; seat < SEATS; seat++) {
             Member member = seats[seat];
-            boolean human = state == State.PLAYING ? people.contains(seat) : member != null;
+            boolean human = state == State.PLAYING ? people.contains(seat) || substituted.contains(seat) : member != null;
             if (state != State.PLAYING && member == null) {
                 continue;
             }
@@ -682,12 +866,20 @@ final class Room implements TableFlow.Listener {
         return timing.dealMs();
     }
 
+    /**
+     * 補位的人等的那個座位打出牌，就是電腦這一手打完了。現在還在 TableFlow 裡面，所以排到後面再換人，
+     * 這時電腦這一手已經走完，換人不會打斷它正在做的決定。
+     */
     @Override
     public void event(RoundEvent event) {
         for (Member member : seats) {
             if (member != null) {
                 member.send(Views.event(event, member.seat));
             }
+        }
+        if (event.type() == RoundEvent.Type.DISCARD && pendingSubstitutes.containsKey(event.seat())) {
+            int seat = event.seat();
+            post(() -> substituteAfterDiscard(seat));
         }
     }
 

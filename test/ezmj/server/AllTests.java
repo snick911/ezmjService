@@ -14,6 +14,7 @@ public final class AllTests {
         HonorBoardTest.run();
         ServerTest.run();
         ListenTest.run();
+        SubstituteTest.run();
         WebSocketTest.run();
         KeepAwakeTest.run();
         System.exit(T.report() == 0 ? 0 : 1);
