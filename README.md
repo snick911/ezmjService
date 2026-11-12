@@ -23,6 +23,7 @@ java -jar ezmj-server-<版號>.jar [port]
 
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 服務器用到引擎的 `ezmj.model.BadWords`（見「不雅字眼」），`ezmj` 的 `9348070`（0.15.0 之後）起才有。`EZMJ_COMMIT` 指的 commit 沒有它的話建置會編譯失敗，舊版本繼續運作。
+- 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有），`EZMJ_COMMIT` 指的就是它。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
@@ -177,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `type` | 欄位 | 說明 |
 |---|---|---|
 | `pong` | | |
-| `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記開局就坐著、打到結束的真人，中途離開、斷線由電腦接手過的座位與中途補位的都不列入 |
+| `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns`、`winningsByStakes` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記開局就坐著、打到結束的真人，中途離開、斷線由電腦接手過的座位與中途補位的都不列入。贏錢金額照底與每台分榜：`winningsByStakes` 每項是一組底台，有 `basePay`、`taiPay`、`records`（那組的贏錢榜，由高到低最多十筆，每筆和上面一樣），依底再依每台由小到大，最多 20 組，超過時拿掉最久沒有新紀錄的那組。`winnings` 是所有底台合起來的，留給舊的用戶端，顯示時不同底台不要放在一起比。0.10.0 和更早的服務器沒有 `winningsByStakes` |
 | `welcome` | `protocol`、`version`、`token`、`name`、`room` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人 |
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
 | `rooms` | `rooms`、`online`、`playingRooms` | 回 `listRooms`。列出還在等人（`lobby`）、不是私人房、真人不到四位的房間；`listRooms` 說了 `supports` `"substitute"` 的話，再加上牌局中、可以補位的房間（見「隨時補位」）。等人的在前面，接著是可以補位的，各自新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字，牌局中是開局時的名字）、`humans`（目前坐著的真人數）、`playing`（牌局中、可以補位）、`openSeats`（還能坐幾個人：等人時是空位數，牌局中是可以替換的電腦數）、`options`（和 `room` 的 `options` 一樣）。`online` 是目前的連線數，看大廳的也算；`playingRooms` 是牌局進行中的房間數，私人房與一人房間也算。0.4.0 和更早的服務器沒有這兩個欄位，0.9.1 和更早的沒有 `playing` 與 `openSeats` |

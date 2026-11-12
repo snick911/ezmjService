@@ -465,6 +465,7 @@ final class ServerTest {
                 Map<String, Object> gameOver = playAll(clients).get(0);
                 checkStandings(gameOver, 40_000_000);
                 checkHonorsMatch("winnings", honorRoll(port), gameOver);
+                checkStakesMatch(honorRoll(port), gameOver, 1_000_000, 1_000_000);
             } finally {
                 closeAll(clients);
             }
@@ -651,6 +652,7 @@ final class ServerTest {
             for (String category : HONOR_CATEGORIES) {
                 T.check(((List<?>) honors.get(category)).isEmpty(), category + " 要是空的");
             }
+            T.check(((List<?>) honors.get("winningsByStakes")).isEmpty(), "分底台的贏錢榜也是空的");
         });
         test("打完一場就記下四位真人的成績，用的是他們自己的名字", port -> {
             List<TestClient> clients = seatedClients(port, 4, "chips", 100);
@@ -662,6 +664,7 @@ final class ServerTest {
                 for (String category : HONOR_CATEGORIES) {
                     checkHonorsMatch(category, honors, gameOver);
                 }
+                checkStakesMatch(honors, gameOver, 100, 20);
             } finally {
                 closeAll(clients);
             }
@@ -778,12 +781,32 @@ final class ServerTest {
         T.eq(expected, entries.size(), category + " 的筆數");
     }
 
+    /** 只打了這一場，分底台的贏錢榜只有房間的那組底台，上面是贏錢的真人，和不分底台的一樣。 */
+    @SuppressWarnings("unchecked")
+    private static void checkStakesMatch(Map<String, Object> honors, Map<String, Object> gameOver, long basePay,
+                                         long taiPay) {
+        List<Map<String, Object>> byStakes = (List<Map<String, Object>>) honors.get("winningsByStakes");
+        if (((List<?>) honors.get("winnings")).isEmpty()) {
+            T.check(byStakes.isEmpty(), "沒有人贏錢就沒有分底台的榜");
+            return;
+        }
+        T.eq(1, byStakes.size(), "只有一組底台");
+        T.eq(basePay, byStakes.get(0).get("basePay"), "底");
+        T.eq(taiPay, byStakes.get(0).get("taiPay"), "每台");
+        checkHonorsMatch("winnings", Map.of("winnings", byStakes.get(0).get("records")), gameOver);
+    }
+
     @SuppressWarnings("unchecked")
     static void checkHonorsOnlyFrom(int port, Set<String> names) throws IOException {
         Map<String, Object> honors = honorRoll(port);
         for (String category : HONOR_CATEGORIES) {
             for (Map<String, Object> entry : (List<Map<String, Object>>) honors.get(category)) {
                 T.check(names.contains(entry.get("name")), category + " 不該有 " + entry);
+            }
+        }
+        for (Map<String, Object> stakes : (List<Map<String, Object>>) honors.get("winningsByStakes")) {
+            for (Map<String, Object> entry : (List<Map<String, Object>>) stakes.get("records")) {
+                T.check(names.contains(entry.get("name")), "winningsByStakes 不該有 " + entry);
             }
         }
     }

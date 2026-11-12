@@ -4,10 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -17,7 +15,7 @@ import ezmj.model.GameRecord;
 import ezmj.model.HonorRoll;
 
 /**
- * 服務器的榮譽榜：真人打完一場的成績，每個類別留下最好的十筆，排序與格式都用引擎的 HonorRoll。
+ * 服務器的榮譽榜：真人打完一場的成績，每個類別留下最好的十筆，贏錢金額照底台分榜，排序與格式都用引擎的 HonorRoll。
  * 每間房間有自己的執行緒，又可能同時打完，所以記憶體裡的榜要同步。
  * 存取 HonorStore 可能要等網路，都放在另一條執行緒上，不能卡住牌桌。
  * 還沒讀到存過的紀錄之前絕對不寫回，不然舊紀錄會被蓋掉；這段時間打完的成績等讀到之後再併進去。
@@ -64,13 +62,22 @@ final class HonorBoard {
         }
     }
 
+    /** winnings 是所有底台合起來的，留給 0.10.0 以前的用戶端；新的看 winningsByStakes，不同底台不放在一起比。 */
     synchronized Map<String, Object> toMessage() {
+        List<Object> byStakes = new ArrayList<>();
+        for (HonorRoll.Stakes stakes : roll.stakes()) {
+            byStakes.add(Protocol.object(
+                    "basePay", stakes.basePay(),
+                    "taiPay", stakes.taiPay(),
+                    "records", entries(roll.top(stakes))));
+        }
         return Protocol.object(
                 "type", "honorRoll",
-                "wins", entries(HonorRoll.Category.WINS),
-                "selfDraws", entries(HonorRoll.Category.SELF_DRAWS),
-                "winnings", entries(HonorRoll.Category.WINNINGS),
-                "dealIns", entries(HonorRoll.Category.DEAL_INS));
+                "wins", entries(roll.top(HonorRoll.Category.WINS)),
+                "selfDraws", entries(roll.top(HonorRoll.Category.SELF_DRAWS)),
+                "winnings", entries(roll.top(HonorRoll.Category.WINNINGS)),
+                "dealIns", entries(roll.top(HonorRoll.Category.DEAL_INS)),
+                "winningsByStakes", byStakes);
     }
 
     /** 讀不到存過的紀錄，或新紀錄存不進去，而且之後還沒成功過。這時成績只在記憶體裡，休眠或部署就沒了。 */
@@ -118,11 +125,7 @@ final class HonorBoard {
         String saved = store.read();
         synchronized (this) {
             HonorRoll merged = parse(saved);
-            Set<GameRecord> mine = new LinkedHashSet<>();
-            for (HonorRoll.Category category : HonorRoll.Category.values()) {
-                mine.addAll(roll.top(category));
-            }
-            mine.forEach(merged::add);
+            roll.allRecords().forEach(merged::add);
             roll = merged;
             loaded = true;
         }
@@ -171,9 +174,9 @@ final class HonorBoard {
         }
     }
 
-    private List<Object> entries(HonorRoll.Category category) {
+    private static List<Object> entries(List<GameRecord> records) {
         List<Object> list = new ArrayList<>();
-        for (GameRecord record : roll.top(category)) {
+        for (GameRecord record : records) {
             List<String> levels = new ArrayList<>();
             for (BotLevel level : record.botLevels()) {
                 levels.add(level.name());

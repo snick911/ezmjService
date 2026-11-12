@@ -5,6 +5,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -16,7 +17,7 @@ import com.sun.net.httpserver.HttpServer;
 import ezmj.model.BotLevel;
 import ezmj.model.GameRecord;
 
-/** 服務器的榮譽榜：留前十筆、重開還在、讀不到存檔時不能蓋掉舊紀錄。 */
+/** 服務器的榮譽榜：留前十筆、贏錢照底台分榜、重開還在、讀不到存檔時不能蓋掉舊紀錄。 */
 final class HonorBoardTest {
 
     private static final int RETRY_MS = 5;
@@ -42,6 +43,38 @@ final class HonorBoardTest {
             T.eq(12, ((Map<?, ?>) entries.get(0)).get("winnings"), "第一名");
             T.eq(3, ((Map<?, ?>) entries.get(9)).get("winnings"), "第十名");
             board.close();
+        }));
+        T.test("贏錢金額照底台分榜，winnings 留給舊用戶端，是所有底台合起來的", () -> T.inTempFolder(folder -> {
+            HonorBoard board = fileBoard(folder.resolve("honor.properties"));
+            board.add(List.of(record("小底", 900, 100, 20), record("大底", 90_000, 1000, 200),
+                    record("小底二", 300, 100, 20)));
+            List<?> byStakes = (List<?>) board.toMessage().get("winningsByStakes");
+            T.eq(2, byStakes.size(), "兩組底台");
+            Map<?, ?> small = (Map<?, ?>) byStakes.get(0);
+            T.eq(100, small.get("basePay"), "底小的在前面");
+            T.eq(20, small.get("taiPay"), "每台");
+            T.eq(List.of("小底", "小底二"), names((List<?>) small.get("records")), "同底台的榜");
+            T.eq(List.of("大底"), names((List<?>) ((Map<?, ?>) byStakes.get(1)).get("records")), "大底台的榜");
+            T.eq(List.of("大底", "小底", "小底二"), names(winnings(board)), "不分底台的");
+            board.close();
+        }));
+        T.test("0.10.0 存的榜沒有分底台，讀進來照底台分好，寫回時兩份都有", () -> T.inTempFolder(folder -> {
+            Path file = folder.resolve("honor.properties");
+            Files.writeString(file, String.join("\n", List.of(
+                    "WINNINGS.0.name=big", "WINNINGS.0.date=2026-11-01", "WINNINGS.0.wins=1", "WINNINGS.0.selfDraws=0",
+                    "WINNINGS.0.winnings=9000", "WINNINGS.0.dealIns=0", "WINNINGS.0.botLevel=PRO,PRO,PRO",
+                    "WINNINGS.0.basePay=1000", "WINNINGS.0.taiPay=200",
+                    "WINS.0.name=small", "WINS.0.date=2026-11-01", "WINS.0.wins=3", "WINS.0.selfDraws=0",
+                    "WINS.0.winnings=50", "WINS.0.dealIns=0", "WINS.0.botLevel=PRO,PRO,PRO",
+                    "WINS.0.basePay=100", "WINS.0.taiPay=20")));
+            HonorBoard board = fileBoard(file);
+            List<?> byStakes = (List<?>) board.toMessage().get("winningsByStakes");
+            T.eq(2, byStakes.size(), "胡牌榜上有贏錢的那場也排進它的底台");
+            T.eq(List.of("small"), names((List<?>) ((Map<?, ?>) byStakes.get(0)).get("records")), "小底台");
+            board.add(List.of(record("新", 10, 100, 20)));
+            board.close();
+            String saved = Files.readString(file);
+            T.check(saved.contains("WINNINGS.100x20.1.name") && saved.contains("WINNINGS.0.name"), "兩份都存");
         }));
         T.test("輸錢的場次不會上贏錢榜", () -> T.inTempFolder(folder -> {
             HonorBoard board = fileBoard(folder.resolve("honor.properties"));
@@ -198,8 +231,20 @@ final class HonorBoardTest {
     }
 
     private static GameRecord record(String name, int winnings) {
+        return record(name, winnings, 100, 20);
+    }
+
+    private static GameRecord record(String name, int winnings, int basePay, int taiPay) {
         return new GameRecord(name, "2026-11-01", 1, 0, winnings, 0,
-                List.of(BotLevel.NORMAL, BotLevel.PRO, BotLevel.BEGINNER), 100, 20);
+                List.of(BotLevel.NORMAL, BotLevel.PRO, BotLevel.BEGINNER), basePay, taiPay);
+    }
+
+    private static List<Object> names(List<?> entries) {
+        List<Object> names = new ArrayList<>();
+        for (Object entry : entries) {
+            names.add(((Map<?, ?>) entry).get("name"));
+        }
+        return names;
     }
 
     /** 在本機假裝是 GitHub，回應的格式和真的 Gist API 一樣，只留用得到的欄位。 */
