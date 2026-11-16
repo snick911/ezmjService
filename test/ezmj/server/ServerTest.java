@@ -558,9 +558,9 @@ final class ServerTest {
                 closeAll(clients);
             }
         });
-        test("下一局的等待：一般 15 秒，流局 5 秒", port -> {
+        test("下一局的等待：一般 15 秒，流局 10 秒（先翻牌牆剩下的牌）", port -> {
             T.eq(15_000, Timing.NORMAL.resultMs(), "一般");
-            T.eq(5_000, Timing.NORMAL.drawnResultMs(), "流局");
+            T.eq(10_000, Timing.NORMAL.drawnResultMs(), "流局");
         });
         test("倒數到了自動打牌", port -> {
             List<TestClient> clients = seatedClients(port, 1, "waitSeconds", 5);

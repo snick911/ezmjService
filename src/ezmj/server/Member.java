@@ -18,6 +18,11 @@ final class Member {
     volatile Connection connection;
     volatile Room room;
     int seat;
+    /**
+     * 客戶端看得懂聽牌後的詢問（createRoom 或 joinRoom 的 supports 有 "listenWin"）：報聽的人等的牌來了，
+     * 讓他自己按胡，見 Room.askListeningWin。每次開房間或加入時重設。
+     */
+    volatile boolean listenWin;
     /** 最近送出的聊天時間，跟著人不跟著房間，換房間也不能多送。 */
     private final Deque<Long> chatTimes = new ArrayDeque<>();
 

@@ -153,6 +153,81 @@ final class ListenTest {
                 ServerTest.closeAll(opened);
             }
         });
+        ServerTest.test("聽牌後等的牌來了：會 listenWin 的客戶端收到只能胡的詢問，回答就胡", port -> {
+            List<TestClient> clients = ServerTest.seatedClients(port, 1, "basePay", 1, "taiPay", 1,
+                    "supports", List.of("listenWin"));
+            try {
+                TestClient client = clients.get(0);
+                Seeker me = new Seeker(client);
+                me.declares = true;
+                client.send("type", "start");
+                Map<String, Object> ask = me.playUntil(m -> Boolean.TRUE.equals(m.get("listenWin")), "聽牌後的詢問");
+                if (is("askTurn").test(ask)) {
+                    T.eq(true, ask.get("canSelfWin"), "自摸");
+                    T.check(((List<?>) ask.get("concealedKongs")).isEmpty() && ((Map<?, ?>) ask.get("readyDiscards")).isEmpty(),
+                            "只能自摸：" + ask);
+                    // 不能打牌
+                    client.send("type", "discard", "waitId", ask.get("waitId"), "tile", "1w");
+                } else {
+                    T.eq("askClaim", ask.get("type"), "胡別家的牌");
+                    List<?> options = (List<?>) ask.get("options");
+                    T.eq(1, options.size(), "只有一個選項");
+                    T.eq("WIN", ((Map<?, ?>) options.get(0)).get("kind"), "只能胡");
+                    // 不能放棄
+                    client.send("type", "pass", "waitId", ask.get("waitId"));
+                }
+                T.eq("illegalMove", client.next("error").get("code"), "聽牌之後只能胡");
+                me.respond(ask);
+                Map<String, Object> end = client.next("roundEnd");
+                T.eq(0L, end.get("winner"), "自己胡了");
+            } finally {
+                ServerTest.closeAll(clients);
+            }
+        });
+        ServerTest.test("聽牌後的詢問 5 秒沒回答就自動胡；舊的客戶端不問", port -> {
+            for (boolean supports : new boolean[] {true, false}) {
+                Object[] options = supports
+                        ? new Object[] {"basePay", 1, "taiPay", 1, "supports", List.of("listenWin")} : SMALL_STAKES;
+                List<TestClient> clients = ServerTest.seatedClients(port, 1, options);
+                try {
+                    TestClient client = clients.get(0);
+                    Seeker me = new Seeker(client);
+                    me.declares = true;
+                    client.send("type", "start");
+                    // 一直打到自己聽牌之後胡的那一局
+                    while (true) {
+                        me.playUntil(m -> isEvent(m, "LISTEN", 0), "報聽");
+                        long asked = 0;
+                        Map<String, Object> end;
+                        while (true) {
+                            Map<String, Object> message = client.poll();
+                            if (Boolean.TRUE.equals(message.get("listenWin"))) {
+                                T.check(supports, "舊的客戶端不該被問：" + message);
+                                asked = System.nanoTime();
+                                continue;
+                            }
+                            if (is("roundEnd").test(message)) {
+                                end = message;
+                                break;
+                            }
+                            T.check(!is("askTurn").test(message) && !is("askClaim").test(message), "聽牌之後不問別的：" + message);
+                            T.check(!is("gameOver").test(message), "整場打完都沒有聽牌後胡");
+                        }
+                        if (Long.valueOf(0).equals(end.get("winner"))) {
+                            if (supports) {
+                                T.check(asked != 0, "胡之前問過");
+                                long waited = (System.nanoTime() - asked) / 1_000_000;
+                                T.check(waited >= 4_500 && waited < 9_000, "等了約 5 秒才自動胡：" + waited);
+                            }
+                            break;
+                        }
+                        me.respond(end);
+                    }
+                } finally {
+                    ServerTest.closeAll(clients);
+                }
+            }
+        });
         ServerTest.test("報聽的人胡了，roundEnd 的 items 有「聽牌」1 台，沒報聽的沒有", port -> {
             List<TestClient> clients = ServerTest.seatedClients(port, 4, SMALL_STAKES);
             ExecutorService pool = Executors.newFixedThreadPool(clients.size());

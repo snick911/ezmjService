@@ -4,6 +4,23 @@
 
 ## 未發布
 
+## 0.12.0 - 2026-11-16
+
+### 新增
+
+- 聽牌後讓玩家自己按胡：報聽的人等的牌來了（自己摸到，或別家打出、加槓），客戶端說過會（`createRoom` 或 `joinRoom` 的 `supports` 有 `"listenWin"`）而且連著，就先問他，5 秒內沒回答照樣自動胡，不能放棄。問的訊息是原本的 `askTurn`（`canSelfWin` 是 true，沒有槓與 `readyDiscards`）或 `askClaim`（`options` 只有 `WIN`），多一個 `listenWin: true`；回答照舊用 `selfWin` 或 `claim`。這段時間全桌照舊收到 `countdown`。沒說 `listenWin` 的舊客戶端、電腦接手中的座位照舊立刻自動胡；同一張牌還要等別的真人宣告時也不問。報聽之後送 `discard`、`kong`、`pass`、`listen` 回錯誤 `illegalMove`。
+  - 用的是 `ezmj` 的 `TableFlow.Listener.askListeningWin`，引擎換成有它的 commit：`Dockerfile` 的 `EZMJ_COMMIT` 是 `ezmj` 0.20.0 的 `69953b4`（以前是 `32148c2`）。
+- 流局的 `roundEnd` 多了 `wall`：牌牆剩下的牌，從牌頭到牌尾，客戶端一張一張翻給大家看；有人胡的局是 null。牌局中的 `state` 照舊沒有牌牆。
+
+### 變更
+
+- 流局的結果畫面從 5 秒改成 10 秒（`nextRoundMs`）：客戶端翻牌約 4 秒，翻完還有時間看結果。大家都送 `ready` 照舊立刻開下一局。
+
+### 測試
+
+- 聽牌後的詢問：會 `listenWin` 的客戶端收到只能胡的詢問（自摸是 `askTurn`、胡別家是只有 `WIN` 的 `askClaim`），這時打牌或過回 `illegalMove`，回答就胡；不回答約 5 秒後自動胡；沒說 `listenWin` 的客戶端不會被問。流局的 `roundEnd` 有 16 張 `wall`、從牌頭排起。
+- 用 `ezmj` 0.20.0（`69953b4`）建置，測試通過；本機實測見 `ezmj_web` 的修改紀錄。
+
 ## 0.11.0 - 2026-11-12
 
 ### 變更

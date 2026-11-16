@@ -136,8 +136,10 @@ final class Views {
                     "melds", melds(player.melds()),
                     "flowers", codes(player.flowers())));
         }
+        // 流局時把牌牆剩下的牌（牌頭到牌尾）也攤開，客戶端一張一張翻給大家看；有人胡的局不送
         return Protocol.object(
                 "type", "roundEnd",
+                "wall", result.isDrawnGame() ? codes(round.wall().order()) : null,
                 "drawnGame", result.isDrawnGame(),
                 "winner", result.winner(),
                 "from", result.from(),

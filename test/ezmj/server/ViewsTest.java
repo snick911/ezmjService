@@ -71,6 +71,32 @@ final class ViewsTest {
             String others = Json.write(Views.state(round, 1, null, false));
             T.check(others.contains("\"listeningWaits\":null"), "別家不知道");
         });
+        T.test("流局的 roundEnd 攤開牌牆剩下的牌，有人胡的不送", () -> {
+            GameConfig config = new GameConfig("甲", 20_000, 100, 20, BotLevel.NORMAL);
+            for (long seed = 1; seed <= 200; seed++) {
+                GameSession session = new GameSession(config, new Random(seed));
+                Round round = session.newRound(message -> { });
+                round.start();
+                // 每家摸什麼打什麼，沒有人宣告，摸完就流局；開局就胡的種子跳過
+                while (round.phase() != Round.Phase.FINISHED) {
+                    if (round.phase() == Round.Phase.TURN) {
+                        round.discard(round.current(), round.rightmostTile(round.current()));
+                    } else {
+                        round.resolveClaims(Map.of());
+                    }
+                }
+                if (!round.result().isDrawnGame()) {
+                    continue;
+                }
+                Map<String, Object> end = Views.roundEnd(round, session.settle(round.result()), false, 5_000);
+                List<?> wall = (List<?>) end.get("wall");
+                T.eq(ezmj.model.Wall.RESERVED, wall.size(), "留牌的張數");
+                T.eq(round.wall().order().get(0).code(), wall.get(0), "從牌頭排起");
+                T.check(Json.parse(Json.write(end)) instanceof Map, "可以寫成 JSON");
+                return;
+            }
+            throw new AssertionError("找不到流局的種子");
+        });
         T.test("局面都能寫成 JSON", () -> {
             Round round = dealtRound();
             T.check(Json.parse(Json.write(Views.state(round, 0, null, false))) instanceof Map, "可以讀回來");

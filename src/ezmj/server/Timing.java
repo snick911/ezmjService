@@ -7,5 +7,6 @@ package ezmj.server;
  */
 record Timing(int dealMs, int resultMs, int drawnResultMs, int abandonMs, boolean instantBots) {
 
-    static final Timing NORMAL = new Timing(3_000, 15_000, 5_000, 120_000, false);
+    /** 流局留 10 秒：客戶端先把牌牆剩下的牌一張一張翻開（約 4 秒），再看結果。 */
+    static final Timing NORMAL = new Timing(3_000, 15_000, 10_000, 120_000, false);
 }

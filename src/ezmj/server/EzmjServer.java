@@ -300,6 +300,7 @@ public final class EzmjServer implements Connection.Handler {
         String code = newRoomCode();
         Room room = new Room(this, code, roomsOpened.incrementAndGet(), options, timing);
         rooms.put(code, room);
+        member.listenWin = supports(message, "listenWin");
         room.join(member);
         log("開房間 " + code + "，目前 " + rooms.size() + " 間");
     }
@@ -314,10 +315,14 @@ public final class EzmjServer implements Connection.Handler {
         if (room.isExpert() && !supports(message, "expert")) {
             throw new Rejected("expertNotSupported", "這間是專家模式的房間，這個版本的程式還不能加入，請用網頁版");
         }
+        member.listenWin = supports(message, "listenWin");
         room.join(member, supports(message, "substitute"));
     }
 
-    /** joinRoom 與 listRooms 的 supports 列出客戶端會的功能，例如 "expert"、"substitute"。舊的客戶端沒有這個欄位。 */
+    /**
+     * createRoom、joinRoom 與 listRooms 的 supports 列出客戶端會的功能，例如 "expert"、"substitute"、"listenWin"。
+     * 舊的客戶端沒有這個欄位。
+     */
     private static boolean supports(Map<String, Object> message, String feature) {
         Object value = message.get("supports");
         if (value == null) {

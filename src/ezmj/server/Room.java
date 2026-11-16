@@ -574,6 +574,10 @@ final class Room implements TableFlow.Listener {
         }
         Round round = flow.round();
         boolean turn = round.phase() == Round.Phase.TURN;
+        // 報聽之後只會為了胡來問他（askListeningWin），不能打牌、槓或放棄
+        if (round.isListening(seat)) {
+            requireMove(type.equals("selfWin") || type.equals("claim"), "聽牌之後只能胡");
+        }
         switch (type) {
             case "discard": {
                 Tile tile = Protocol.tile(message, "tile");
@@ -907,6 +911,35 @@ final class Room implements TableFlow.Listener {
     @Override
     public void askClaim(int seat, int waitId, List<Claim> claims) {
         send(seat, new Ask(waitId, Views.askClaim(waitId, flow.round(), claims), claims));
+    }
+
+    /**
+     * 報聽的人等的牌來了。客戶端看得懂（supports 有 "listenWin"）而且連著，就送一份只有胡可以選的詢問，
+     * 多一個 listenWin: true：自摸是 askTurn（canSelfWin），胡別家的牌是 askClaim（options 只有 WIN）。
+     * 客戶端照舊用 selfWin 或 claim 回答，TableFlow.LISTENING_WIN_SECONDS 秒內沒回答就自動胡。
+     * 舊的客戶端不問，照舊立刻自動胡。
+     */
+    @Override
+    public boolean askListeningWin(int seat, int waitId, boolean selfDraw) {
+        Member member = seats[seat];
+        if (member == null || member.connection == null || !member.listenWin) {
+            return false;
+        }
+        Round round = flow.round();
+        Map<String, Object> message;
+        List<Claim> wins = List.of();
+        if (selfDraw) {
+            message = Views.askTurn(waitId, round.turnOptions(seat), Map.of());
+        } else {
+            wins = round.claimOptions(seat).stream().filter(claim -> claim.type() == Claim.Type.WIN).toList();
+            if (wins.isEmpty()) {
+                return false;
+            }
+            message = Views.askClaim(waitId, round, wins);
+        }
+        message.put("listenWin", true);
+        send(seat, new Ask(waitId, message, wins));
+        return true;
     }
 
     private void send(int seat, Ask ask) {

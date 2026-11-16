@@ -23,7 +23,8 @@ java -jar ezmj-server-<版號>.jar [port]
 
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 服務器用到引擎的 `ezmj.model.BadWords`（見「不雅字眼」），`ezmj` 的 `9348070`（0.15.0 之後）起才有。`EZMJ_COMMIT` 指的 commit 沒有它的話建置會編譯失敗，舊版本繼續運作。
-- 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有），`EZMJ_COMMIT` 指的就是它。
+- 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有）。
+- 聽牌後讓玩家自己按胡用到引擎 `ezmj.table.TableFlow.Listener` 的 `askListeningWin`，`ezmj` 的 `69953b4`（0.20.0）起才有，`EZMJ_COMMIT` 指的就是它。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
@@ -137,15 +138,15 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `honorRoll` | | 回 `honorRoll`，不用登入 |
 | `listRooms` | 可以加 `supports` | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次。`supports` 有 `"substitute"` 才會列出可以補位的牌局，見「隨時補位」 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`，斷線重連帶 `token`。`name` 去掉前後空白後 1 到 16 個字（用 code point 算），不能有控制字元與不雅字眼（見「不雅字眼」），不合格回錯誤 `badName`，這條連線還沒登入，可以換個名字再送 |
-| `createRoom` | 下面的房間設定，都可以省略 | 開房間並坐到座位 0 |
-| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入（`gameInProgress`），隨時補位的房間例外，見「隨時補位」。`supports` 是客戶端會的功能清單：`"expert"` 是專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）；`"substitute"` 是會中途補位。`supports` 不是清單回 `badMessage` |
+| `createRoom` | 下面的房間設定，都可以省略；可以加 `supports` | 開房間並坐到座位 0。`supports` 和 `joinRoom` 的一樣，開房間的人只看 `"listenWin"` |
+| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入（`gameInProgress`），隨時補位的房間例外，見「隨時補位」。`supports` 是客戶端會的功能清單：`"expert"` 是專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）；`"substitute"` 是會中途補位；`"listenWin"` 是看得懂聽牌後的詢問（`askTurn`／`askClaim` 的 `listenWin`），說了才會問，沒說照舊自動胡。`supports` 不是清單回 `badMessage` |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打。還在等補位的話就是不等了 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
 | `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元與不雅字眼，不合格回錯誤 `badChat`，整則不轉給別人。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
-| `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓 |
+| `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓。客戶端說過 `supports` `"listenWin"` 的話，等的牌來了會先問你（`listenWin: true` 的 `askTurn` 或 `askClaim`），5 秒內用 `selfWin` 或 `claim` 回答，沒回答照樣自動胡；這時送 `discard`、`kong`、`pass` 回錯誤 `illegalMove` |
 | `listen` | `waitId`、`tile` | 打出這張牌並立刻報聽，之後和 `declareListen` 一樣。網頁版跟電腦打的聽牌按鈕用這個。專家模式的房間不接受，回錯誤 `illegalMove` |
 | `selfWin` | `waitId` | 自摸 |
 | `kong` | `waitId`、`tile` | 暗槓或加槓 |
@@ -192,10 +193,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
 | `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`、`LISTEN`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1，`LISTEN` 是 `seat` 報聽了，沒有 `tile` |
 | `canListen` | `listenId` | 只送給你：你剛打出牌，剩下的手牌已經聽牌，可以用 `declareListen` 報聽。到你下一次摸牌、吃碰槓或這局結束就過期，過期不另外通知。電腦接手中不會送 |
-| `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」，專家模式的房間一律是空的 |
-| `askClaim` | `waitId`、`tile`、`from`、`robbing`、`options` | 別人打出或加槓的牌可以宣告。`options` 每項有 `kind`（`WIN`、`KONG`、`PONG`、`CHOW`）、`tile`、`fromHand` |
+| `askTurn` | `waitId`、`canSelfWin`、`concealedKongs`、`addKongs`、`readyDiscards`，聽牌後的詢問多 `listenWin` | 輪到你。`readyDiscards` 是「打哪張牌會聽哪些牌」，專家模式的房間一律是空的。`listenWin` 是 true 時是報聽之後摸到等的牌：只能回 `selfWin`，5 秒內沒回答自動自摸 |
+| `askClaim` | `waitId`、`tile`、`from`、`robbing`、`options`，聽牌後的詢問多 `listenWin` | 別人打出或加槓的牌可以宣告。`options` 每項有 `kind`（`WIN`、`KONG`、`PONG`、`CHOW`）、`tile`、`fromHand`。`listenWin` 是 true 時是報聽之後別家打出等的牌：`options` 只有 `WIN`，只能回 `claim`，5 秒內沒回答自動胡 |
 | `countdown` | `seconds` | 這次等待還剩幾秒，全桌都會收到 |
-| `roundEnd` | `drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數（每項有 `name`、`tai`，報聽的人胡牌時有「聽牌」1 台），`hands` 攤開四家的牌。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 5 秒） |
+| `roundEnd` | `wall`、`drawnGame`、`winner`、`from`、`selfDraw`、`winTile`、`items`、`deltas`、`tais`、`chips`、`hands`、`gameOver`、`nextRoundMs` | 一局結束。陣列都依座位排列，`items` 是牌型與台數（每項有 `name`、`tai`，報聽的人胡牌時有「聽牌」1 台），`hands` 攤開四家的牌。`wall` 是流局時牌牆剩下的牌，從牌頭到牌尾，給客戶端翻開；有人胡的局是 null，0.11.0 和更早的服務器沒有。沒有人送 `ready` 的話，`nextRoundMs` 後開下一局（一般 15 秒，流局 10 秒，0.11.0 和更早是 5 秒） |
 | `gameOver` | `reason`（`roundsComplete`、`bankrupt`）、`rounds`、`drawnGames`、`standings` | 整場結束，接著房間回到 `lobby`，可以再開一場。`standings` 依名次排，每項有 `rank`、`seat`、`name`、`chips`、`winnings`、`wins`、`selfDraws`、`dealIns` |
 
 `state` 的欄位：
