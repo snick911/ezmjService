@@ -25,7 +25,7 @@ java -jar ezmj-server-<版號>.jar [port]
 - 服務器用到引擎的 `ezmj.model.BadWords`（見「不雅字眼」），`ezmj` 的 `9348070`（0.15.0 之後）起才有。`EZMJ_COMMIT` 指的 commit 沒有它的話建置會編譯失敗，舊版本繼續運作。
 - 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有）。
 - 聽牌後讓玩家自己按胡用到引擎 `ezmj.table.TableFlow.Listener` 的 `askListeningWin`，`ezmj` 的 `69953b4`（0.20.0）起才有。
-- 開門的骰子（`roundStart` 與 `state` 的 `dice`）用到引擎的 `Round.dice()`，照真的牌桌疊牌牆、擲骰子開門的 `Wall` 也在同一個 commit，`ezmj` 的 `7fd8924` 起才有，`EZMJ_COMMIT` 指的就是它。
+- 開門的骰子（`roundStart` 與 `state` 的 `dice`）用到引擎的 `Round.dice()`，照真的牌桌疊牌牆、擲骰子開門的 `Wall` 也在同一個 commit，`ezmj` 的 `7fd8924`（0.23.0 之前）起才有，`EZMJ_COMMIT` 指的是 0.23.0 的 `2604c1c`。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
