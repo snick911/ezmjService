@@ -8,6 +8,7 @@ import ezmj.engine.GameSession;
 import ezmj.engine.Round;
 import ezmj.engine.RoundEvent;
 import ezmj.model.BotLevel;
+import ezmj.model.Dice;
 import ezmj.model.GameConfig;
 import ezmj.model.Meld;
 import ezmj.model.Tile;
@@ -96,6 +97,12 @@ final class ViewsTest {
                 return;
             }
             throw new AssertionError("找不到流局的種子");
+        });
+        T.test("局面帶著這局開門的骰子，是牌牆真的照它開門的那一組", () -> {
+            Round round = dealtRound();
+            Dice dice = round.dice();
+            T.eq(List.of(dice.first(), dice.second(), dice.third()), Views.state(round, 2, null, false).get("dice"), "三顆骰子");
+            T.eq(round.wall().start(), new ezmj.engine.WallRing(round.dealer(), dice).start(), "照骰子開門");
         });
         T.test("局面都能寫成 JSON", () -> {
             Round round = dealtRound();

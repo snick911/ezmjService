@@ -2,6 +2,7 @@ package ezmj.server;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -470,7 +471,7 @@ final class ServerTest {
                 closeAll(clients);
             }
         });
-        test("roundStart 與 state 都帶局風：起莊是東局，換莊往下一局，連莊不變", port -> {
+        test("roundStart 與 state 都帶局風與開門的骰子：起莊是東局，換莊往下一局，連莊不變", port -> {
             // 底和每台很小，不會有人破產，一定打到換莊
             List<TestClient> clients = seatedClients(port, 1, "basePay", 1, "taiPay", 1);
             try {
@@ -1022,15 +1023,30 @@ final class ServerTest {
         throw new AssertionError("沒有人輪到");
     }
 
-    /** 局風依起莊算：起莊是東局，往下一家依序加一，連莊不變。state 要和這局的 roundStart 一樣。 */
+    /**
+     * 局風依起莊算：起莊是東局，往下一家依序加一，連莊不變。
+     * 每局都有三顆 1 到 6 點的骰子，每局重新擲。state 的局風與骰子要和這局的 roundStart 一樣。
+     */
     private static void checkHandWinds(TestClient client) {
         Long firstDealer = null;
         long previousDealer = -1;
         Object handWind = null;
+        Object dice = null;
+        Set<Object> rolls = new HashSet<>();
+        int rounds = 0;
         int dealerChanges = 0;
         synchronized (client.seen) {
             for (Map<String, Object> message : client.seen) {
                 if ("roundStart".equals(message.get("type"))) {
+                    dice = message.get("dice");
+                    List<?> faces = (List<?>) dice;
+                    T.eq(3, faces.size(), "三顆骰子");
+                    for (Object face : faces) {
+                        long value = (Long) face;
+                        T.check(value >= 1 && value <= 6, "1 到 6 點：" + value);
+                    }
+                    rolls.add(dice);
+                    rounds++;
                     long dealer = (Long) message.get("dealer");
                     if (firstDealer == null) {
                         firstDealer = dealer;
@@ -1045,10 +1061,12 @@ final class ServerTest {
                     handWind = message.get("handWind");
                 } else if ("state".equals(message.get("type"))) {
                     T.eq(handWind, message.get("handWind"), "state 和這局的 roundStart 一樣");
+                    T.eq(dice, message.get("dice"), "state 的骰子和這局的 roundStart 一樣");
                 }
             }
         }
         T.check(dealerChanges > 0, "要換過莊");
+        T.check(rounds < 3 || rolls.size() > 1, "每局重新擲骰子：" + rounds + " 局擲出 " + rolls);
     }
 
     static Map<String, Object> lastOfType(TestClient client, String type) {

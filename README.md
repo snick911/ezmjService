@@ -24,7 +24,8 @@ java -jar ezmj-server-<版號>.jar [port]
 - 引擎固定在 `Dockerfile` 的 `EZMJ_COMMIT`，更新 `ezmj` 不會觸發部署。要換引擎就改這個值再 push，新的 commit 要先 push 到 GitHub。
 - 服務器用到引擎的 `ezmj.model.BadWords`（見「不雅字眼」），`ezmj` 的 `9348070`（0.15.0 之後）起才有。`EZMJ_COMMIT` 指的 commit 沒有它的話建置會編譯失敗，舊版本繼續運作。
 - 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有）。
-- 聽牌後讓玩家自己按胡用到引擎 `ezmj.table.TableFlow.Listener` 的 `askListeningWin`，`ezmj` 的 `69953b4`（0.20.0）起才有，`EZMJ_COMMIT` 指的就是它。
+- 聽牌後讓玩家自己按胡用到引擎 `ezmj.table.TableFlow.Listener` 的 `askListeningWin`，`ezmj` 的 `69953b4`（0.20.0）起才有。
+- 開門的骰子（`roundStart` 與 `state` 的 `dice`）用到引擎的 `Round.dice()`，照真的牌桌疊牌牆、擲骰子開門的 `Wall` 也在同一個 commit，`ezmj` 的 `7fd8924` 起才有，`EZMJ_COMMIT` 指的就是它。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
@@ -189,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `substituteWaiting` | `seat`、`replacing`、`computer` | 只送給你：隨時補位的房間正在打，已經替你保留座位 `seat`，等那個座位的電腦打完這一手就換你上場。`replacing` 是現在那個座位的名字；`computer` 是 true 表示開局時就是電腦，false 表示是離開的玩家留下、由電腦代打的座位。斷線重連時再送一次 |
 | `substituted` | `seat`、`name`、`replaced`、`computer` | 有人補位上場了，全桌都收到，補位的本人也收到（在他的 `room` 與 `state` 之後）。`name` 是補位的人，`replaced` 是被換掉的座位原本的名字，`computer` 同 `substituteWaiting`。客戶端要寫得明顯，例如「玩家 小明 替換電腦（阿土伯）加入」 |
 | `roomClosed` | `reason`（`empty`、`abandoned`、`serverStopping`、`serverError`） | 房間關閉 |
-| `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來 |
+| `roundStart` | `number`、`dealer`、`roundWind`、`handWind`、`streak`、`dice`、`dealMs` | 開新的一局，`dealMs` 內不會行牌，用來演擲骰子與發牌。`roundWind` 是圈風，`handWind` 是局風，都是 1 到 4 代表東、南、西、北，例如「東風南局」是 1 與 2。局風依起莊算：起莊那位當莊是東局，下一家當莊是南局，連莊時不變。起莊是隨機的，客戶端只看莊家算不出來。`dice` 是莊家擲的三顆骰子，例如 `[4, 5, 2]`：牌牆照真的牌桌疊好之後擲，從莊家起照行牌順序數點數，數到的那家從他牌牆的右端數過點數那麼多墩開門，發牌與摸牌都從這裡拿，見 `ezmj` README 的「擲骰子與牌牆」。0.12.0 和更早的服務器沒有 |
 | `state` | 見下面 | 局面每走一步都送一次完整的局面 |
 | `event` | `kind`、`seat`、`tile`、`from` | 給動畫與音效用。`kind` 是 `DISCARD`、`CHOW`、`PONG`、`KONG`、`CONCEALED_KONG`、`ADD_KONG`、`WIN`、`SELF_WIN`、`DRAWN_GAME`、`DRAW`、`FLOWER`、`LISTEN`。別家的 `DRAW` 沒有 `tile`，流局的 `seat` 是 -1，`LISTEN` 是 `seat` 報聽了，沒有 `tile` |
 | `canListen` | `listenId` | 只送給你：你剛打出牌，剩下的手牌已經聽牌，可以用 `declareListen` 報聽。到你下一次摸牌、吃碰槓或這局結束就過期，過期不另外通知。電腦接手中不會送 |
@@ -205,7 +206,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|
 | `seat` | 這份局面是哪個座位看到的，也就是你 |
 | `phase`、`current` | `TURN`、`CLAIMS`、`FINISHED`，以及輪到的座位 |
-| `dealer`、`streak`、`roundWind`、`handWind`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、局風（和 `roundStart` 一樣）、自己的門風、牌牆剩幾張 |
+| `dealer`、`streak`、`roundWind`、`handWind`、`dice`、`seatWind`、`liveTiles` | 莊家、連莊數、圈風、局風、開門的骰子（和 `roundStart` 一樣，斷線接回沒有 `roundStart` 時從這裡拿）、自己的門風、牌牆剩幾張 |
 | `hand`、`drawn`、`melds`、`flowers`、`discards`、`chips` | 自己的手牌、剛摸的牌（已經算在 `hand` 裡）、面子、花牌、牌河、籌碼 |
 | `claimTile`、`discarder`、`robbing` | 等宣告的牌、打出的人、是不是搶槓 |
 | `listeningWaits`、`autoPlay` | 自己報聽後等的牌（沒有報聽是 null），別家不會知道；留給舊版客戶端的欄位，連線中的玩家一定是 false |

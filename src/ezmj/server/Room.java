@@ -858,6 +858,7 @@ final class Room implements TableFlow.Listener {
                 "roundWind", round.roundWind(),
                 "handWind", round.handWind(),
                 "streak", round.streak(),
+                "dice", Views.dice(round.dice()),
                 "dealMs", timing.dealMs()));
     }
 

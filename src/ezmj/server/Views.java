@@ -13,6 +13,7 @@ import ezmj.engine.RoundEvent;
 import ezmj.engine.RoundResult;
 import ezmj.engine.Settlement;
 import ezmj.engine.TurnOptions;
+import ezmj.model.Dice;
 import ezmj.model.GameRecord;
 import ezmj.model.Meld;
 import ezmj.model.Player;
@@ -59,6 +60,8 @@ final class Views {
                 "roundWind", view.roundWind(),
                 // 局風全桌都一樣，TableView 沒有，直接讀 Round
                 "handWind", round.handWind(),
+                // 開門的骰子大家都看得到；牌牆真的照它開門，客戶端用它畫牌牆
+                "dice", dice(round.dice()),
                 "seatWind", view.seatWind(),
                 "liveTiles", view.liveTiles(),
                 "hand", codes(view.hand()),
@@ -73,6 +76,11 @@ final class Views {
                 "listeningWaits", listeningWaits == null ? null : codes(listeningWaits),
                 "autoPlay", autoPlay,
                 "opponents", opponents);
+    }
+
+    /** 三顆骰子的點數，例如 [4, 5, 2]。 */
+    static List<Object> dice(Dice dice) {
+        return dice == null ? null : List.of(dice.first(), dice.second(), dice.third());
     }
 
     /** 摸到什麼牌只有摸牌的人知道。其他事件都是攤在桌上的，暗槓的 tile 本來就是 null。 */
