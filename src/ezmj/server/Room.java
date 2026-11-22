@@ -34,6 +34,7 @@ import ezmj.model.BotLevel;
 import ezmj.model.GameConfig;
 import ezmj.model.GameRecord;
 import ezmj.model.Tile;
+import ezmj.online.VoiceClip;
 import ezmj.table.TableFlow;
 
 /**
@@ -271,6 +272,9 @@ final class Room implements TableFlow.Listener {
                 break;
             case "chat":
                 chat(member, message);
+                break;
+            case "voice":
+                voice(member, message);
                 break;
             case "declareListen":
                 requirePlaying();
@@ -550,6 +554,35 @@ final class Room implements TableFlow.Listener {
             throw new Rejected("chatTooFast", "說得太快了，請稍等一下");
         }
         broadcast(Protocol.object("type", "chat", "seat", member.seat, "name", member.name, "text", text));
+    }
+
+    /**
+     * 語音訊息，等人或牌局中都可以，和聊天一樣只轉給現在連著的真人、不留歷史。格式與頻率限制用 ezmj 的 VoiceClip，
+     * 和客戶端一樣。聲音只轉給聽得懂語音的人（Member.voice），一則將近 53 KB；發話的人收到一則沒有 data 的，
+     * 知道送出了，聲音不用再傳回去。不合格式的在算頻率之前擋，被拒的不算一則。
+     */
+    private void voice(Member member, Map<String, Object> message) {
+        String text = Protocol.string(message, "data");
+        byte[] data;
+        try {
+            data = VoiceClip.fromBase64(text);
+        } catch (IllegalArgumentException bad) {
+            throw new Rejected("badVoice", bad.getMessage());
+        }
+        long now = System.nanoTime() / 1_000_000;
+        long waitMs = member.voiceTimes.waitMs(now);
+        if (waitMs > 0 || !member.voiceTimes.tryRecord(now)) {
+            throw new Rejected("voiceTooFast", VoiceClip.tooFastText(waitMs));
+        }
+        int ms = VoiceClip.millis(data);
+        Map<String, Object> heard = Protocol.object("type", "voice", "seat", member.seat, "name", member.name, "ms", ms,
+                "data", text);
+        for (Member other : seats) {
+            if (other != null && other != member && other.voice) {
+                other.send(heard);
+            }
+        }
+        member.send(Protocol.object("type", "voice", "seat", member.seat, "name", member.name, "ms", ms));
     }
 
     private void startNextRound() {

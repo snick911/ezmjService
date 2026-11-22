@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import ezmj.model.BadWords;
+import ezmj.online.VoiceClip;
 
 /**
  * 台灣十六張麻將的多人連線服務器。牌局規則全部由服務器上的引擎決定，客戶端只送決定、只收看得到的局面。
@@ -264,6 +265,7 @@ public final class EzmjServer implements Connection.Handler {
         }
     }
 
+    /** features 是協定版本不變、後來才加的功能，客戶端看了才顯示對應的按鈕，例如語音。 */
     private static Map<String, Object> welcome(Member member) {
         Room room = member.room;
         return Protocol.object(
@@ -272,8 +274,11 @@ public final class EzmjServer implements Connection.Handler {
                 "version", ServerVersion.get(),
                 "token", member.token,
                 "name", member.name,
-                "room", room == null ? null : room.code());
+                "room", room == null ? null : room.code(),
+                "features", FEATURES);
     }
+
+    private static final List<String> FEATURES = List.of(VoiceClip.FEATURE);
 
     /**
      * 客戶端按下開房間或加入時才帶名字送 hello，所以在這裡擋，開房間與加入都不會再看到名字。
@@ -301,6 +306,7 @@ public final class EzmjServer implements Connection.Handler {
         Room room = new Room(this, code, roomsOpened.incrementAndGet(), options, timing);
         rooms.put(code, room);
         member.listenWin = supports(message, "listenWin");
+        member.voice = supports(message, VoiceClip.FEATURE);
         room.join(member);
         log("開房間 " + code + "，目前 " + rooms.size() + " 間");
     }
@@ -316,11 +322,12 @@ public final class EzmjServer implements Connection.Handler {
             throw new Rejected("expertNotSupported", "這間是專家模式的房間，這個版本的程式還不能加入，請用網頁版");
         }
         member.listenWin = supports(message, "listenWin");
+        member.voice = supports(message, VoiceClip.FEATURE);
         room.join(member, supports(message, "substitute"));
     }
 
     /**
-     * createRoom、joinRoom 與 listRooms 的 supports 列出客戶端會的功能，例如 "expert"、"substitute"、"listenWin"。
+     * createRoom、joinRoom 與 listRooms 的 supports 列出客戶端會的功能，例如 "expert"、"substitute"、"listenWin"、"voice"。
      * 舊的客戶端沒有這個欄位。
      */
     private static boolean supports(Map<String, Object> message, String feature) {

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -14,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import ezmj.model.BadWords;
+import ezmj.online.VoiceClip;
 
 /** 真的開一台服務器，用 TCP 連上去打。 */
 final class ServerTest {
@@ -437,6 +439,74 @@ final class ServerTest {
                 T.eq("快打啦", chat.get("text"), "內容");
             } finally {
                 closeAll(clients);
+            }
+        });
+
+        T.section("語音");
+        test("welcome 的 features 有 voice", port -> {
+            try (TestClient client = new TestClient(port)) {
+                client.send("type", "hello", "protocol", Protocol.VERSION, "name", "甲");
+                T.eq(List.of("voice"), client.next("welcome").get("features"), "客戶端看這個顯示說話的按鈕");
+            }
+        });
+        test("語音只轉給聽得懂的真人，發話的人只收到長度", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙");
+                 TestClient old = TestClient.login(port, "丙")) {
+                String code = createRoom(host, "supports", List.of("voice"));
+                guest.send("type", "joinRoom", "code", code, "supports", List.of("expert", "substitute", "voice"));
+                guest.next("room");
+                old.send("type", "joinRoom", "code", code);
+                old.next("room");
+                byte[] clip = VoiceClip.encode(new float[VoiceClip.RATE * 3 / 2], VoiceClip.RATE);
+                host.send("type", "voice", "data", VoiceClip.toBase64(clip));
+                Map<String, Object> heard = guest.next("voice");
+                T.eq(0L, heard.get("seat"), "發話的座位");
+                T.eq("甲", heard.get("name"), "發話的名字");
+                T.eq(1500L, heard.get("ms"), "長度");
+                T.eq(VoiceClip.toBase64(clip), heard.get("data"), "聲音原封不動");
+                Map<String, Object> sent = host.next("voice");
+                T.eq(1500L, sent.get("ms"), "自己的也有長度");
+                T.check(!sent.containsKey("data"), "聲音不用傳回去");
+                // 舊的客戶端沒帶 voice：之後的聊天先到，表示語音沒有轉給它
+                host.send("type", "chat", "text", "聽到了嗎");
+                old.next("chat");
+                T.check(old.seen.stream().noneMatch(m -> "voice".equals(m.get("type"))), "沒有轉給舊的客戶端");
+            }
+        });
+        test("語音不合格式回 badVoice，30 秒超過 3 則回 voiceTooFast，被拒的不算", port -> {
+            try (TestClient host = TestClient.login(port, "甲")) {
+                createRoom(host, "supports", List.of("voice"));
+                host.send("type", "voice", "data", "不是base64");
+                Map<String, Object> error = host.next("error");
+                T.eq("badVoice", error.get("code"), "不是 base64");
+                T.eq("語音的格式不對", error.get("message"), "可以直接顯示的訊息");
+                host.send("type", "voice", "data", VoiceClip.toBase64(VoiceClip.encode(new float[800], VoiceClip.RATE)));
+                T.eq("語音太短了", host.next("error").get("message"), "太短");
+                host.send("type", "voice", "data", 3);
+                T.eq("badMessage", host.next("error").get("code"), "不是字串");
+                String clip = VoiceClip.toBase64(VoiceClip.encode(new float[VoiceClip.RATE], VoiceClip.RATE));
+                for (int i = 0; i < VoiceClip.LIMIT; i++) {
+                    host.send("type", "voice", "data", clip);
+                    T.eq(1000L, host.next("voice").get("ms"), "第 " + (i + 1) + " 則照送");
+                }
+                host.send("type", "voice", "data", clip);
+                Map<String, Object> tooFast = host.next("error");
+                T.eq("voiceTooFast", tooFast.get("code"), "第 4 則");
+                T.check(String.valueOf(tooFast.get("message")).startsWith("語音傳得太快了"), "說要等多久");
+            }
+        });
+        test("最長的語音也在一則 64 KB 之內", port -> {
+            try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
+                String code = createRoom(host, "supports", List.of("voice"));
+                guest.send("type", "joinRoom", "code", code, "supports", List.of("voice"));
+                guest.next("room");
+                float[] noise = new float[VoiceClip.RATE * VoiceClip.MAX_MS / 1000];
+                Random random = new Random(1);
+                for (int i = 0; i < noise.length; i++) {
+                    noise[i] = random.nextFloat() * 2 - 1;
+                }
+                host.send("type", "voice", "data", VoiceClip.toBase64(VoiceClip.encode(noise, VoiceClip.RATE)));
+                T.eq((long) VoiceClip.MAX_MS, guest.next("voice").get("ms"), "轉過去了");
             }
         });
 

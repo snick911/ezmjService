@@ -4,6 +4,17 @@
 
 ## 未發布
 
+### 新增
+
+- 語音訊息（`voice`）：牌桌上按住說話、放開送出的語音，由服務器轉給同桌的真人，見 README 的「語音」。`data` 是 base64 的 8 kHz IMA ADPCM，0.3 到 10 秒，格式、長度與頻率限制用 `ezmj` 的 `VoiceClip`，和客戶端共用。不合格回 `badVoice`，每人每 30 秒超過 3 則回 `voiceTooFast`，被拒的不算。聲音只轉給 `createRoom` 或 `joinRoom` 的 `supports` 有 `"voice"` 的人；發話的人收到一則沒有 `data` 的，知道送出了。
+- `welcome` 多了 `features`，目前是 `["voice"]`，客戶端看了才顯示說話的按鈕。協定版本還是 1。
+- 引擎要換成有 `VoiceClip` 的 `ezmj`：`Dockerfile` 的 `EZMJ_COMMIT` 要換成那個 commit 才編得過。
+
+### 測試
+
+- 語音：`welcome` 有 `features`；只轉給說了 `voice` 的人，帶聲音與長度，發話的人只有長度；不是 base64、太短、不是字串的不收；第 4 則回 `voiceTooFast`；最長的 10 秒也轉得過去。
+- 用本機的 `ezmj` 建置，`AllTests` 127 項通過。
+
 ## 0.13.0 - 2026-11-19
 
 ### 新增

@@ -139,13 +139,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `honorRoll` | | 回 `honorRoll`，不用登入 |
 | `listRooms` | 可以加 `supports` | 回 `rooms`，不用登入。服務器不會主動推送列表，客戶端在大廳畫面時每 5 秒或按「重新整理」送一次。`supports` 有 `"substitute"` 才會列出可以補位的牌局，見「隨時補位」 |
 | `hello` | `protocol`，`name` 或 `token` | 登入。第一次帶 `name`，斷線重連帶 `token`。`name` 去掉前後空白後 1 到 16 個字（用 code point 算），不能有控制字元與不雅字眼（見「不雅字眼」），不合格回錯誤 `badName`，這條連線還沒登入，可以換個名字再送 |
-| `createRoom` | 下面的房間設定，都可以省略；可以加 `supports` | 開房間並坐到座位 0。`supports` 和 `joinRoom` 的一樣，開房間的人只看 `"listenWin"` |
-| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入（`gameInProgress`），隨時補位的房間例外，見「隨時補位」。`supports` 是客戶端會的功能清單：`"expert"` 是專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）；`"substitute"` 是會中途補位；`"listenWin"` 是看得懂聽牌後的詢問（`askTurn`／`askClaim` 的 `listenWin`），說了才會問，沒說照舊自動胡。`supports` 不是清單回 `badMessage` |
+| `createRoom` | 下面的房間設定，都可以省略；可以加 `supports` | 開房間並坐到座位 0。`supports` 和 `joinRoom` 的一樣，開房間的人只看 `"listenWin"` 與 `"voice"` |
+| `joinRoom` | `code`，可以加 `supports` | 用房號加入，私人房也一樣。開打之後不能加入（`gameInProgress`），隨時補位的房間例外，見「隨時補位」。`supports` 是客戶端會的功能清單：`"expert"` 是專家模式的房間要有它才能加入，不然回錯誤 `expertNotSupported`（沒有照專家模式藏資訊的客戶端會比別人看得多）；`"substitute"` 是會中途補位；`"listenWin"` 是看得懂聽牌後的詢問（`askTurn`／`askClaim` 的 `listenWin`），說了才會問，沒說照舊自動胡；`"voice"` 是聽得懂語音訊息，說了別人的語音才轉給你，見「語音」。`supports` 不是清單回 `badMessage` |
 | `leave` | | 離開房間。牌局中離開就回不來了，座位由電腦打。還在等補位的話就是不等了 |
 | `start` | | 開局，只有房主可以。不到四人時由電腦補滿 |
 | `autoPlay` | `on` | 不再提供，一律回錯誤 `autoPlayNotAllowed`。多人遊戲不能使用電腦代打 |
 | `ready` | | 看完這局的結果。連著的人都送了就立刻開下一局 |
 | `chat` | `text` | 牌桌聊天，要在房間裡，等人或牌局中都可以。`text` 去掉前後空白後 1 到 100 個字（用 code point 算），不能有控制字元與不雅字眼，不合格回錯誤 `badChat`，整則不轉給別人。每人每 10 秒最多 5 則，超過回錯誤 `chatTooFast`，被拒的不算 |
+| `voice` | `data` | 語音訊息，要在房間裡，等人或牌局中都可以。`data` 是 base64 的聲音，格式見「語音」，不合格回錯誤 `badVoice`，整則不轉給別人。每人每 30 秒最多 3 則，超過回錯誤 `voiceTooFast`，被拒的不算 |
 | `discard` | `waitId`、`tile` | 打牌 |
 | `declareListen` | `listenId` | 報聽，`listenId` 來自 `canListen`。編號過期了（已經摸牌、吃碰槓或這局結束）就忽略，不回錯誤。報聽之後全桌都知道，服務器替你自動摸打、自動胡，不再吃碰槓，也不能槓。客戶端說過 `supports` `"listenWin"` 的話，等的牌來了會先問你（`listenWin: true` 的 `askTurn` 或 `askClaim`），5 秒內用 `selfWin` 或 `claim` 回答，沒回答照樣自動胡；這時送 `discard`、`kong`、`pass` 回錯誤 `illegalMove` |
 | `listen` | `waitId`、`tile` | 打出這張牌並立刻報聽，之後和 `declareListen` 一樣。網頁版跟電腦打的聽牌按鈕用這個。專家模式的房間不接受，回錯誤 `illegalMove` |
@@ -181,11 +182,12 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 |---|---|---|
 | `pong` | | |
 | `honorRoll` | `wins`、`selfDraws`、`winnings`、`dealIns`、`winningsByStakes` | 榮譽榜，四個類別各自由高到低最多十筆，數值相同時先達成的在前面，數值是 0 以下的不列入。每筆有 `name`、`date`、`wins`、`selfDraws`、`winnings`、`dealIns`、`botLevels`、`basePay`、`taiPay`。`date` 是台灣日期，`botLevels` 是房間設定，有真人坐的座位用不到。只記開局就坐著、打到結束的真人，中途離開、斷線由電腦接手過的座位與中途補位的都不列入。贏錢金額照底與每台分榜：`winningsByStakes` 每項是一組底台，有 `basePay`、`taiPay`、`records`（那組的贏錢榜，由高到低最多十筆，每筆和上面一樣），依底再依每台由小到大，最多 20 組，超過時拿掉最久沒有新紀錄的那組。`winnings` 是所有底台合起來的，留給舊的用戶端，顯示時不同底台不要放在一起比。0.10.0 和更早的服務器沒有 `winningsByStakes` |
-| `welcome` | `protocol`、`version`、`token`、`name`、`room` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人 |
+| `welcome` | `protocol`、`version`、`token`、`name`、`room`、`features` | 登入成功。`room` 是目前所在的房號或 null。token 要留著重連用，不能給別人。`features` 是協定版本不變、後來才加的功能，客戶端看了才顯示對應的按鈕，目前只有 `"voice"`；0.13.0 和更早的服務器沒有這個欄位 |
 | `error` | `code`、`message` | 要求不被接受，局面不變。`message` 可以直接顯示 |
 | `rooms` | `rooms`、`online`、`playingRooms` | 回 `listRooms`。列出還在等人（`lobby`）、不是私人房、真人不到四位的房間；`listRooms` 說了 `supports` `"substitute"` 的話，再加上牌局中、可以補位的房間（見「隨時補位」）。等人的在前面，接著是可以補位的，各自新開的在前面，最多 50 間。每項有 `code`、`name`、`host`（座位 0 的名字，牌局中是開局時的名字）、`humans`（目前坐著的真人數）、`playing`（牌局中、可以補位）、`openSeats`（還能坐幾個人：等人時是空位數，牌局中是可以替換的電腦數）、`options`（和 `room` 的 `options` 一樣）。`online` 是目前的連線數，看大廳的也算；`playingRooms` 是牌局進行中的房間數，私人房與一人房間也算。0.4.0 和更早的服務器沒有這兩個欄位，0.9.1 和更早的沒有 `playing` 與 `openSeats` |
 | `room` | `code`、`state`（`lobby`、`playing`）、`yourSeat`、`options`、`players` | 房間有變化時送。`options` 是房間設定，`name` 已經補上預設，一定有值。`players` 每項有 `seat`、`name`、`human`、`connected`，電腦還有 `gender` |
 | `chat` | `seat`、`name`、`text` | 房間裡有人聊天，送給房間裡連著的每一位真人，發話的人自己也會收到。`seat` 與 `name` 是發話的人。不保留歷史，斷線期間的訊息不補送 |
+| `voice` | `seat`、`name`、`ms`，別人的多 `data` | 房間裡有人傳語音。送給房間裡其他連著、`supports` 有 `"voice"` 的真人，帶 `data`；發話的人自己收到的沒有 `data`，表示送出了。`ms` 是長度（毫秒）。和聊天一樣不保留歷史 |
 | `left` | | 已經離開房間 |
 | `substituteWaiting` | `seat`、`replacing`、`computer` | 只送給你：隨時補位的房間正在打，已經替你保留座位 `seat`，等那個座位的電腦打完這一手就換你上場。`replacing` 是現在那個座位的名字；`computer` 是 true 表示開局時就是電腦，false 表示是離開的玩家留下、由電腦代打的座位。斷線重連時再送一次 |
 | `substituted` | `seat`、`name`、`replaced`、`computer` | 有人補位上場了，全桌都收到，補位的本人也收到（在他的 `room` 與 `state` 之後）。`name` 是補位的人，`replaced` 是被換掉的座位原本的名字，`computer` 同 `substituteWaiting`。客戶端要寫得明顯，例如「玩家 小明 替換電腦（阿土伯）加入」 |
@@ -235,6 +237,16 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 - 舊版客戶端不會遮收到的聊天，只有服務器不轉，它們才不會看到。新版客戶端收到聊天時還是會用 `BadWords.mask` 遮一次，給沒有這項檢查的舊服務器用。
 
 字詞要加減或判斷錯了，改 `ezmj` 的 `BadWords`，三邊一起換：服務器要重新建置，部署到 Render 時還要把 `Dockerfile` 的 `EZMJ_COMMIT` 換成新的 commit。`EZMJ_COMMIT` 指的 commit 沒有 `BadWords` 的話編譯會失敗，見「部署到 Render」。
+
+### 語音
+
+牌桌上按住說話、放開送出的語音訊息，由服務器轉給同桌的真人。不做即時通話：那要 WebRTC 與付費的中繼伺服器，Swing 版也做不到。
+
+- **格式**：8 kHz 單聲道的 IMA ADPCM，每個取樣 4 位元，一秒 4 KB。前兩個位元組是第一個取樣（16 位元，小端序），第三個是步階索引（0 到 88），後面每個位元組放兩個取樣，先低四位元。0.3 到 10 秒。編解碼、長度與頻率限制都在 `ezmj` 的 `ezmj.online.VoiceClip`，Swing 版、網頁版與服務器共用。不用瀏覽器的錄音格式：Chrome 錄成 WebM/Opus、Safari 錄成 MP4/AAC，Swing 都播不了。
+- **大小**：最長 10 秒約 40 KB，base64 後約 53 KB，放得進一則訊息 64 KB 的上限，連線層不用改。一則轉給另外三家約 160 KB，發話的人只收到一則沒有聲音的回覆。
+- **檢查**：`VoiceClip.fromBase64` 看長度、base64 與步階索引，不合格回 `badVoice`，`message` 可以直接顯示，例如「語音太短了」。服務器不解開聲音，也聽不出內容，所以語音沒辦法像聊天一樣擋不雅字眼；客戶端讓玩家把某一位靜音，也可以整個關掉自動播放。
+- **頻率**：每人每 30 秒最多 3 則（`VoiceClip.LIMIT`），最多就是一直在說話。和聊天一樣跟著人，換房間也不能多送。
+- **相容**：只轉給 `supports` 有 `"voice"` 的客戶端，看不懂的舊版不會收到將近 53 KB 的訊息；客戶端看 `welcome` 的 `features` 有沒有 `"voice"` 決定要不要顯示說話的按鈕。舊服務器收到 `voice` 會回 `unknownType`。協定版本不變。
 
 ### 隨時補位
 
