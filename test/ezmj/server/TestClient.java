@@ -10,27 +10,46 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
-/** 測試用的客戶端，走真的 TCP 連線。收到的訊息都留在 seen，用來檢查有沒有洩漏。 */
+import ezmj.online.Wire;
+
+/**
+ * 測試用的客戶端，走真的 TCP 連線。收到的訊息都留在 seen，用來檢查有沒有洩漏。
+ * 和現在的客戶端一樣送 Wire 加密過的訊息；plain 建的是舊的客戶端，送沒加密的 JSON。收到的兩種都看得懂，原樣留在 rawLines。
+ */
 final class TestClient implements AutoCloseable {
 
     private static final Map<String, Object> CLOSED = Map.of("type", "(連線已關閉)");
+    private static final Random RANDOM = new Random();
 
     private final Socket socket;
     private final OutputStream out;
+    private final boolean encoded;
     private final BlockingQueue<Map<String, Object>> incoming = new LinkedBlockingQueue<>();
     final List<Map<String, Object>> seen = Collections.synchronizedList(new ArrayList<>());
+    final List<String> rawLines = Collections.synchronizedList(new ArrayList<>());
 
     TestClient(int port) throws IOException {
+        this(port, true);
+    }
+
+    private TestClient(int port, boolean encoded) throws IOException {
+        this.encoded = encoded;
         socket = new Socket("127.0.0.1", port);
         out = socket.getOutputStream();
         Thread reader = new Thread(this::readLoop, "test-client");
         reader.setDaemon(true);
         reader.start();
+    }
+
+    /** 舊的客戶端，送沒加密的 JSON。 */
+    static TestClient plain(int port) throws IOException {
+        return new TestClient(port, false);
     }
 
     /** 連上之後登入，回傳 welcome。 */
@@ -46,7 +65,8 @@ final class TestClient implements AutoCloseable {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = in.readLine()) != null) {
-                Map<String, Object> message = (Map<String, Object>) Json.parse(line);
+                rawLines.add(line);
+                Map<String, Object> message = (Map<String, Object>) Json.parse(Wire.read(line));
                 seen.add(message);
                 incoming.add(message);
             }
@@ -57,9 +77,11 @@ final class TestClient implements AutoCloseable {
     }
 
     void send(Object... pairs) throws IOException {
-        sendRaw(Json.write(Protocol.object(pairs)));
+        String json = Json.write(Protocol.object(pairs));
+        sendRaw(encoded ? Wire.encode(json, RANDOM) : json);
     }
 
+    /** 照原樣送出這一行，不加密。 */
     void sendRaw(String line) throws IOException {
         out.write((line + "\n").getBytes(StandardCharsets.UTF_8));
         out.flush();

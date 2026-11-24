@@ -7,18 +7,29 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import ezmj.online.Wire;
+
 /**
- * 一條客戶端連線，一則 UTF-8 JSON 是 TCP 上的一行，或 WebSocket 的一則文字訊息，看第一則訊息決定。
+ * 一條客戶端連線，一則訊息是 TCP 上的一行，或 WebSocket 的一則文字訊息，看第一則訊息決定。
  * 讀與寫各一條執行緒：牌桌只把訊息放進佇列，對方網路再慢也不會卡住其他人；佇列滿了就斷線。
+ *
+ * 訊息是 ezmj 的 Wire 加密過的 JSON，瀏覽器的開發者工具裡看不出內容。舊的客戶端送沒加密的 JSON，每一則都看開頭分辨；
+ * 收過一則加密的之後，送出去的也加密，不然照舊送 JSON。
  */
 final class Connection {
 
-    /** 客戶端的訊息都很短，超過就視為惡意並斷線。 */
-    private static final int MAX_LINE_BYTES = 64 * 1024;
+    /**
+     * 客戶端的訊息都很短，超過就視為惡意並斷線。最長的是 10 秒的語音：base64 約 53 KB，加密後再轉一次 base64 約 71 KB。
+     */
+    private static final int MAX_LINE_BYTES = 96 * 1024;
+    /** Wire 的 nonce，每則都要不一樣。SecureRandom 可以同時給很多條執行緒用。 */
+    private static final Random RANDOM = new SecureRandom();
     /** 這段時間什麼都沒收到就斷線，客戶端閒置時要送 ping。 */
     private static final int READ_TIMEOUT_MS = 60_000;
     private static final int MAX_QUEUED = 1024;
@@ -44,6 +55,8 @@ final class Connection {
     private volatile Member member;
     /** 讀取執行緒在處理第一則訊息之前決定，之後才會有東西要送。 */
     private volatile boolean webSocket;
+    /** 收過加密的訊息，送出去的也要加密。讀取執行緒在處理那則訊息之前改，所以回應它的就已經加密。 */
+    private volatile boolean encoded;
 
     Connection(Socket socket, Handler handler) {
         this.socket = socket;
@@ -70,10 +83,10 @@ final class Connection {
     }
 
     void send(Map<String, Object> message) {
-        String json = Json.write(message);
+        String text = encoded ? Wire.encode(Json.write(message), RANDOM) : Json.write(message);
         enqueue(webSocket
-                ? WebSocket.frame(WebSocket.TEXT, json.getBytes(StandardCharsets.UTF_8))
-                : (json + "\n").getBytes(StandardCharsets.UTF_8));
+                ? WebSocket.frame(WebSocket.TEXT, text.getBytes(StandardCharsets.UTF_8))
+                : (text + "\n").getBytes(StandardCharsets.UTF_8));
     }
 
     /** 送出這則訊息後關閉。 */
@@ -173,8 +186,18 @@ final class Connection {
         if (line.isBlank()) {
             return;
         }
+        String json = line;
+        if (!Wire.isPlain(line)) {
+            try {
+                json = Wire.decode(line);
+            } catch (IllegalArgumentException garbled) {
+                send(Protocol.error("badMessage", "訊息看不懂"));
+                return;
+            }
+            encoded = true;
+        }
         try {
-            Object parsed = Json.parse(line);
+            Object parsed = Json.parse(json);
             if (!(parsed instanceof Map)) {
                 throw new Rejected("badMessage", "訊息要是 JSON 物件");
             }

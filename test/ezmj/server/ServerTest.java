@@ -1,7 +1,9 @@
 package ezmj.server;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,7 @@ import java.util.function.Predicate;
 
 import ezmj.model.BadWords;
 import ezmj.online.VoiceClip;
+import ezmj.online.Wire;
 
 /** 真的開一台服務器，用 TCP 連上去打。 */
 final class ServerTest {
@@ -64,10 +67,40 @@ final class ServerTest {
                 client.next("pong");
             }
         });
+        test("加密的客戶端：回給它的也加密，看不出內容", port -> {
+            try (TestClient client = TestClient.login(port, "小明")) {
+                client.send("type", "ping");
+                client.next("pong");
+                synchronized (client.rawLines) {
+                    T.check(client.rawLines.size() >= 2, "收到 welcome 與 pong");
+                    for (String raw : client.rawLines) {
+                        T.check(!Wire.isPlain(raw) && !raw.contains("welcome") && !raw.contains("pong"), "看不出內容：" + raw);
+                    }
+                }
+            }
+        });
+        test("舊的客戶端送沒加密的 JSON，回給它的也是 JSON", port -> {
+            try (TestClient client = TestClient.plain(port)) {
+                client.send("type", "hello", "protocol", Protocol.VERSION, "name", "小明");
+                T.eq("小明", client.next("welcome").get("name"), "登入");
+                T.check(Wire.isPlain(client.rawLines.get(0)), "沒加密：" + client.rawLines.get(0));
+            }
+        });
+        test("解不開的加密訊息回錯誤，連線還在", port -> {
+            try (TestClient client = TestClient.login(port, "小明")) {
+                String line = Wire.encode("{\"type\":\"ping\"}", new Random(1));
+                client.sendRaw(line.substring(0, 10) + (line.charAt(10) == 'A' ? 'B' : 'A') + line.substring(11));
+                T.eq("badMessage", client.next("error").get("code"), "被改過");
+                client.sendRaw(Base64.getEncoder().encodeToString("{\"type\":\"ping\"}".getBytes(StandardCharsets.UTF_8)));
+                T.eq("badMessage", client.next("error").get("code"), "只有 base64");
+                client.send("type", "ping");
+                client.next("pong");
+            }
+        });
         test("太長的一行就斷線", port -> {
             try (TestClient client = new TestClient(port)) {
                 try {
-                    client.sendRaw("x".repeat(70_000));
+                    client.sendRaw("x".repeat(100_000));
                 } catch (IOException cutOff) {
                     // 服務器可能在還沒寫完時就斷線
                 }
@@ -495,7 +528,7 @@ final class ServerTest {
                 T.check(String.valueOf(tooFast.get("message")).startsWith("語音傳得太快了"), "說要等多久");
             }
         });
-        test("最長的語音也在一則 64 KB 之內", port -> {
+        test("最長的語音加密後也在一則 96 KB 之內", port -> {
             try (TestClient host = TestClient.login(port, "甲"); TestClient guest = TestClient.login(port, "乙")) {
                 String code = createRoom(host, "supports", List.of("voice"));
                 guest.send("type", "joinRoom", "code", code, "supports", List.of("voice"));

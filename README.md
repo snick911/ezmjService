@@ -26,7 +26,8 @@ java -jar ezmj-server-<版號>.jar [port]
 - 贏錢金額照底台分榜用到引擎 `ezmj.model.HonorRoll` 的 `Stakes`、`stakes()`、`top(Stakes)`、`allRecords()`，`ezmj` 的 `32148c2` 起才有（`9348070` 還沒有）。
 - 聽牌後讓玩家自己按胡用到引擎 `ezmj.table.TableFlow.Listener` 的 `askListeningWin`，`ezmj` 的 `69953b4`（0.20.0）起才有。
 - 開門的骰子（`roundStart` 與 `state` 的 `dice`）用到引擎的 `Round.dice()`，照真的牌桌疊牌牆、擲骰子開門的 `Wall` 也在同一個 commit，`ezmj` 的 `7fd8924`（0.23.0 之前）起才有。
-- 語音（見「語音」）用到引擎的 `ezmj.online.VoiceClip`，`ezmj` 的 `90e1aa9`（0.24.0 之前）起才有，`EZMJ_COMMIT` 指的是 0.24.0 的 `caa4a91`。
+- 語音（見「語音」）用到引擎的 `ezmj.online.VoiceClip`，`ezmj` 的 `90e1aa9`（0.24.0 之前）起才有。
+- 訊息加密（見「連線協定」）用到引擎的 `ezmj.online.Wire`，`ezmj` 0.25.0 的 `55580b2` 起才有，`EZMJ_COMMIT` 指的就是它。
 - 每次部署都會結束進行中的牌局，token 也會失效。不影響服務器的 commit，例如只改文件，在訊息裡加 `[skip render]` 就不會部署。
 - Render 只把 HTTP 轉進來，所以線上的客戶端要用 `wss://ezmj-server.onrender.com/ws`，TCP 只能用在自己架的服務器。
 - 要確認服務器有沒有在跑，打開 <https://ezmj-server.onrender.com/status>，內容見「連線協定」。
@@ -106,10 +107,17 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 同一個 port 接受兩種連線，訊息內容完全一樣：
 
-- TCP：一行一則 UTF-8 JSON，以 `\n` 結尾。
-- WebSocket：連到 `/ws`，一則文字訊息是一則 JSON，不用 `\n`。二進位訊息會斷線。
+- TCP：一行一則，以 `\n` 結尾。
+- WebSocket：連到 `/ws`，一則文字訊息是一則，不用 `\n`。二進位訊息會斷線。
 
-一則訊息最多 64 KB，超過就斷線。60 秒沒有收到任何訊息也會斷線，閒置時客戶端要定期送 `ping`，WebSocket 層的 ping 也算。
+一則訊息是 `ezmj` 的 `online.Wire` 加密過的 JSON（0.15.0 起），瀏覽器的開發者工具與封包紀錄裡只看得到一串 base64，看不出打了哪張牌、誰在聽牌、聊了什麼：
+
+- 格式是 base64(nonce 12 位元組 ‖ ChaCha20(UTF-8 的 JSON ‖ FNV-1a 檢查碼 4 位元組))，nonce 每則重新亂數，同樣的 `ping` 每次看起來也不一樣。金鑰、加密與解開都在 `Wire`，Swing 版、網頁版與服務器共用同一份，改了要三邊一起換。
+- 這只是不讓一般人一看就懂：金鑰寫在客戶端程式裡，原始碼也公開，有心的人照樣拆得開。別人的手牌與牌牆本來就不送，不靠加密；網路上的竊聽由 `wss://` 的 TLS 擋。
+- 舊的客戶端送沒加密的 JSON，一定以 `{` 開頭，base64 不會，所以每一則都看開頭分辨（`Connection.dispatch`）。收過一則加密的，回給這條連線的也加密；不然照舊送 JSON。解不開的回 `badMessage`，連線不斷。
+- 新的客戶端收到沒加密的 JSON 也看得懂，連到舊的服務器時至少讀得到錯誤訊息。所以部署時先換服務器，再換網頁。
+
+一則訊息最多 96 KB，超過就斷線：最長的是 10 秒的語音，base64 約 53 KB，加密後再轉一次 base64 約 71 KB。60 秒沒有收到任何訊息也會斷線，閒置時客戶端要定期送 `ping`，WebSocket 層的 ping 也算。
 
 `GET /healthz` 回 200，給主機做健康檢查。
 
@@ -244,7 +252,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 牌桌上按住說話、放開送出的語音訊息，由服務器轉給同桌的真人。不做即時通話：那要 WebRTC 與付費的中繼伺服器，Swing 版也做不到。
 
 - **格式**：8 kHz 單聲道的 IMA ADPCM，每個取樣 4 位元，一秒 4 KB。前兩個位元組是第一個取樣（16 位元，小端序），第三個是步階索引（0 到 88），後面每個位元組放兩個取樣，先低四位元。0.3 到 10 秒。編解碼、長度與頻率限制都在 `ezmj` 的 `ezmj.online.VoiceClip`，Swing 版、網頁版與服務器共用。不用瀏覽器的錄音格式：Chrome 錄成 WebM/Opus、Safari 錄成 MP4/AAC，Swing 都播不了。
-- **大小**：最長 10 秒約 40 KB，base64 後約 53 KB，放得進一則訊息 64 KB 的上限，連線層不用改。一則轉給另外三家約 160 KB，發話的人只收到一則沒有聲音的回覆。
+- **大小**：最長 10 秒約 40 KB，base64 後約 53 KB，加密後（見「連線協定」）約 71 KB，放得進一則訊息 96 KB 的上限。一則轉給另外三家約 160 KB，發話的人只收到一則沒有聲音的回覆。
 - **檢查**：`VoiceClip.fromBase64` 看長度、base64 與步階索引，不合格回 `badVoice`，`message` 可以直接顯示，例如「語音太短了」。服務器不解開聲音，也聽不出內容，所以語音沒辦法像聊天一樣擋不雅字眼；客戶端讓玩家把某一位靜音，也可以整個關掉自動播放。
 - **頻率**：每人每 30 秒最多 3 則（`VoiceClip.LIMIT`），最多就是一直在說話。和聊天一樣跟著人，換房間也不能多送。
 - **相容**：只轉給 `supports` 有 `"voice"` 的客戶端，看不懂的舊版不會收到將近 53 KB 的訊息；客戶端看 `welcome` 的 `features` 有沒有 `"voice"` 決定要不要顯示說話的按鈕。舊服務器收到 `voice` 會回 `unknownType`。協定版本不變。

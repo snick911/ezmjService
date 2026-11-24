@@ -12,13 +12,18 @@ import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+
+import ezmj.online.Wire;
 
 /** 真的開一台服務器，用 JDK 內建的 HTTP 與 WebSocket 客戶端連上去，和服務器的實作互相驗證。 */
 final class WebSocketTest {
@@ -98,6 +103,18 @@ final class WebSocketTest {
                 T.eq("pong", client.next("pong").get("type"), "pong");
                 client.send("{\"type\":\"hello\",\"protocol\":" + Protocol.VERSION + ",\"name\":\"小明\"}");
                 T.eq("小明", client.next("welcome").get("name"), "名字");
+            }
+        });
+        test("加密的訊息，回的也加密", port -> {
+            try (Client client = new Client(port)) {
+                Random random = new Random(2);
+                client.send(Wire.encode("{\"type\":\"hello\",\"protocol\":" + Protocol.VERSION + ",\"name\":\"小明\"}", random));
+                T.eq("小明", client.next("welcome").get("name"), "登入");
+                client.send(Wire.encode("{\"type\":\"createRoom\"}", random));
+                client.next("room");
+                for (String raw : List.copyOf(client.rawTexts)) {
+                    T.check(!Wire.isPlain(raw) && !raw.contains("小明"), "看不出內容：" + raw);
+                }
             }
         });
         test("分段送出的訊息要接起來", port -> {
@@ -218,10 +235,11 @@ final class WebSocketTest {
         return socket;
     }
 
-    /** JDK 內建的 WebSocket 客戶端，收到的訊息放進佇列。 */
+    /** JDK 內建的 WebSocket 客戶端，收到的訊息放進佇列。send 照原樣送；收到的加密與沒加密的都看得懂，原樣留在 rawTexts。 */
     private static final class Client implements WebSocket.Listener, AutoCloseable {
         final WebSocket socket;
         final BlockingQueue<String> pongs = new LinkedBlockingQueue<>();
+        final List<String> rawTexts = Collections.synchronizedList(new ArrayList<>());
         private final BlockingQueue<Map<String, Object>> incoming = new LinkedBlockingQueue<>();
         private final CompletableFuture<Integer> closed = new CompletableFuture<>();
         private final StringBuilder partial = new StringBuilder();
@@ -258,7 +276,8 @@ final class WebSocketTest {
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             partial.append(data);
             if (last) {
-                incoming.add((Map<String, Object>) Json.parse(partial.toString()));
+                rawTexts.add(partial.toString());
+                incoming.add((Map<String, Object>) Json.parse(Wire.read(partial.toString())));
                 partial.setLength(0);
             }
             webSocket.request(1);
